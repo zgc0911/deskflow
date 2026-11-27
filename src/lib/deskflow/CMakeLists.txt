@@ -69,6 +69,8 @@ add_library(${lib_name} STATIC ${PLATFORM_CODE}
   KeyMap.h
   KeyState.cpp
   KeyState.h
+  LocalFileSystem.cpp
+  LocalFileSystem.h
   MouseTypes.h
   OptionTypes.h
   PacketStreamFilter.cpp
@@ -105,4 +107,9 @@ target_link_libraries(${lib_name}
 
 if(UNIX AND NOT APPLE)
   target_link_libraries(${lib_name} PRIVATE server)
+endif()
+
+if(WIN32)
+  # the logged on user, whose files are read when the core runs as SYSTEM
+  target_link_libraries(${lib_name} PRIVATE Wtsapi32)
 endif()

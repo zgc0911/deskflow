@@ -9,10 +9,8 @@
 #include "base/Event.h"
 #include "base/IEventQueue.h"
 #include "base/Log.h"
+#include "deskflow/LocalFileSystem.h"
 
-#include <QDateTime>
-#include <QDir>
-#include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
 
@@ -48,6 +46,9 @@ const size_t kListingBytesPerMessage = 48 * 1024;
 //! A listing larger than this is refused by the computer that asked for it
 const uint64_t kMaxListingBytes = 64ULL * 1024 * 1024;
 
+//! How long stopping waits for a file that is being read, the reading may hang
+const int kWorkerStopWaitMs = 3000;
+
 //! Work for the thread that runs the event queue
 class FileTransferTask : public EventData
 {
@@ -64,11 +65,6 @@ public:
 private:
   std::function<void()> m_task;
 };
-
-bool isLink(const QFileInfo &info)
-{
-  return info.isSymbolicLink() || info.isJunction();
-}
 
 FileTransferStatus statusFromError(uint32_t code)
 {
@@ -405,7 +401,7 @@ thread that runs the event queue.
 struct FileTransfer::ServedIo
 {
   QFile file;
-  std::unique_ptr<QDirIterator> listing;
+  std::unique_ptr<LocalDirectory> listing;
   //! Set when the copied entries themselves are listed, not what is in a directory
   bool listsRoots = false;
   QStringList roots;
@@ -426,56 +422,91 @@ struct FileTransfer::IoResult
   uint64_t unused = 0;
 };
 
+//! The files this computer offers, used by the thread of the event queue and the worker thread
+struct FileTransfer::Registry
+{
+  std::mutex mutex;
+  FileOfferRegistry offers;
+};
+
 //! Runs one job at a time on a thread of its own
+/*!
+A job may hang: on a network volume that went away, or while the system asks
+the user for permission. Stopping does not wait for that for long, the thread
+is left to finish on its own then. So a job may only use what it shares.
+*/
 class FileTransfer::Worker
 {
 public:
-  Worker() : m_thread([this] { run(); })
+  Worker() : m_state(std::make_shared<State>())
   {
+    m_thread = std::thread([state = m_state] { run(*state); });
   }
 
   ~Worker()
   {
     {
-      std::scoped_lock lock{m_mutex};
-      m_stop = true;
+      std::scoped_lock lock{m_state->mutex};
+      m_state->stop = true;
+      m_state->jobs.clear();
     }
-    m_changed.notify_all();
-    m_thread.join();
+    m_state->changed.notify_all();
+
+    std::unique_lock lock{m_state->mutex};
+    const bool ended = m_state->changed.wait_for(lock, std::chrono::milliseconds(kWorkerStopWaitMs), [this] {
+      return m_state->ended;
+    });
+    lock.unlock();
+    if (ended) {
+      m_thread.join();
+    } else {
+      LOG_WARN("not waiting any longer for a file that is being read");
+      m_thread.detach();
+    }
   }
 
   void add(std::function<void()> job)
   {
     {
-      std::scoped_lock lock{m_mutex};
-      m_jobs.push_back(std::move(job));
+      std::scoped_lock lock{m_state->mutex};
+      m_state->jobs.push_back(std::move(job));
     }
-    m_changed.notify_all();
+    m_state->changed.notify_all();
   }
 
 private:
-  void run()
+  struct State
+  {
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::deque<std::function<void()>> jobs;
+    bool stop = false;
+    bool ended = false;
+  };
+
+  static void run(State &state)
   {
     for (;;) {
       std::function<void()> job;
       {
-        std::unique_lock lock{m_mutex};
-        m_changed.wait(lock, [this] { return m_stop || !m_jobs.empty(); });
-        if (m_stop) {
-          return;
+        std::unique_lock lock{state.mutex};
+        state.changed.wait(lock, [&state] { return state.stop || !state.jobs.empty(); });
+        if (state.stop) {
+          break;
         }
-        job = std::move(m_jobs.front());
-        m_jobs.pop_front();
+        job = std::move(state.jobs.front());
+        state.jobs.pop_front();
       }
       job();
     }
+    {
+      std::scoped_lock lock{state.mutex};
+      state.ended = true;
+    }
+    state.changed.notify_all();
   }
 
-  std::mutex m_mutex;
-  std::condition_variable m_changed;
-  std::deque<std::function<void()>> m_jobs;
-  bool m_stop = false;
-  // last, so that everything it uses exists before it starts
+  std::shared_ptr<State> m_state;
   std::thread m_thread;
 };
 
@@ -483,7 +514,10 @@ private:
 // FileTransfer
 //
 
-FileTransfer::FileTransfer(IEventQueue *events) : m_events(events), m_shared(std::make_shared<FileTransferShared>())
+FileTransfer::FileTransfer(IEventQueue *events)
+    : m_events(events),
+      m_registry(std::make_shared<Registry>()),
+      m_shared(std::make_shared<FileTransferShared>())
 {
   assert(m_events != nullptr);
   m_shared->owner = this;
@@ -540,14 +574,15 @@ void FileTransfer::setEnabled(bool enabled)
 
   // stop everything that is in progress, in both directions
   {
-    std::scoped_lock lock{m_registryMutex};
-    m_registry.withdraw();
+    std::scoped_lock lock{m_registry->mutex};
+    m_registry->offers.withdraw();
   }
   for (const auto &entry : m_served) {
     sendError(entry.first.first, entry.first.second, Error::Disabled, "file sharing was turned off");
   }
   m_served.clear();
   m_unflushed.clear();
+  m_lastSent.clear();
   updateServedCount();
   m_remoteOffers.clear();
 
@@ -593,13 +628,14 @@ void FileTransfer::setReplyTimeout(int milliseconds)
 
 std::string FileTransfer::offerLocalFiles(const std::vector<std::string> &paths)
 {
-  std::scoped_lock lock{m_registryMutex};
+  // looking at the files may hold up the worker thread for a moment, never the other way round
+  std::scoped_lock lock{m_registry->mutex};
   if (!m_enabled) {
-    m_registry.withdraw();
+    m_registry->offers.withdraw();
     return {};
   }
 
-  const ClipboardFileList list = m_registry.offer(paths);
+  const ClipboardFileList list = m_registry->offers.offer(paths);
   if (list.entries.empty()) {
     return {};
   }
@@ -609,8 +645,8 @@ std::string FileTransfer::offerLocalFiles(const std::vector<std::string> &paths)
 
 void FileTransfer::withdrawLocalFiles()
 {
-  std::scoped_lock lock{m_registryMutex};
-  m_registry.withdraw();
+  std::scoped_lock lock{m_registry->mutex};
+  m_registry->offers.withdraw();
 }
 
 bool FileTransfer::isLocalOffer(std::string_view fileList)
@@ -619,8 +655,8 @@ bool FileTransfer::isLocalOffer(std::string_view fileList)
   if (!ClipboardFileList::unmarshall(fileList, list)) {
     return false;
   }
-  std::scoped_lock lock{m_registryMutex};
-  return m_registry.isOffered(list.offerId);
+  std::scoped_lock lock{m_registry->mutex};
+  return m_registry->offers.isOffered(list.offerId);
 }
 
 void FileTransfer::sendError(IFileTransferChannel *channel, uint32_t requestId, Error error, const char *message)
@@ -698,15 +734,15 @@ void FileTransfer::handleRequest(
 
   // finding and opening the file is the first thing that may block
   const std::string relativePath(pathView);
-  runJob(key, serial, [this, io, kind, offerId, item, relativePath, offset] {
+  runJob(key, serial, [registry = m_registry, io, kind, offerId, item, relativePath, offset] {
     IoResult result;
     if (kind == Protocol::RequestList && item == Protocol::AllItems) {
       // what was copied, as it is now
       if (!relativePath.empty()) {
         return IoResult{false, Error::BadPath, "not one of the offered files"};
       }
-      std::scoped_lock lock{m_registryMutex};
-      if (!m_registry.roots(offerId, io->roots)) {
+      std::scoped_lock lock{registry->mutex};
+      if (!registry->offers.roots(offerId, io->roots)) {
         return IoResult{false, Error::UnknownOffer, "these files are no longer offered"};
       }
       io->listsRoots = true;
@@ -714,11 +750,18 @@ void FileTransfer::handleRequest(
       return result;
     }
 
-    QString localPath;
+    // the files are looked at without holding the registry, that may take long
+    QString root;
+    QStringList components;
     FileOfferRegistry::Resolved resolved;
     {
-      std::scoped_lock lock{m_registryMutex};
-      resolved = m_registry.resolve(offerId, item, relativePath, localPath);
+      std::scoped_lock lock{registry->mutex};
+      resolved = registry->offers.locate(offerId, item, relativePath, root, components);
+    }
+    QString localPath;
+    LocalEntry entry;
+    if (resolved == FileOfferRegistry::Resolved::Ok) {
+      resolved = FileOfferRegistry::walk(root, components, localPath, entry);
     }
     switch (resolved) {
       using enum FileOfferRegistry::Resolved;
@@ -732,18 +775,18 @@ void FileTransfer::handleRequest(
       return IoResult{false, Error::NotFound, "no such file or directory"};
     }
 
-    const QFileInfo info(localPath);
     if (kind == Protocol::RequestList) {
-      if (!info.isDir()) {
+      if (entry.type != LocalEntry::Type::Directory) {
         return IoResult{false, Error::WrongType, "not a directory"};
       }
-      io->listing = std::make_unique<QDirIterator>(
-          localPath, QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot
-      );
+      io->listing = std::make_unique<LocalDirectory>(localPath);
+      if (!io->listing->isOpen()) {
+        return IoResult{false, Error::ReadFailed, "can not list the directory"};
+      }
       return result;
     }
 
-    if (!info.isFile()) {
+    if (entry.type != LocalEntry::Type::File) {
       return IoResult{false, Error::WrongType, "not a file"};
     }
     io->file.setFileName(localPath);
@@ -762,7 +805,10 @@ void FileTransfer::runJob(const ServedKey &key, uint64_t serial, std::function<I
     m_worker = std::make_unique<Worker>();
   }
   m_worker->add([shared = m_shared, key, serial, job = std::move(job)] {
-    auto result = std::make_shared<IoResult>(job());
+    // the files are read for the user, also when the core runs for the system
+    auto result = std::make_shared<IoResult>(
+        LocalFileSystem::actAsSessionUser() ? job() : IoResult{false, Error::ReadFailed, "no user is logged on"}
+    );
     shared->post([key, serial, result](FileTransfer &owner) { owner.jobFinished(key, serial, *result); });
   });
 }
@@ -832,6 +878,14 @@ void FileTransfer::pump(IFileTransferChannel *channel)
     }
   }
 
+  // requests take turns: the one after the request that sent last goes first, so that one big
+  // file does not hold up the others
+  if (const auto last = m_lastSent.find(channel); last != m_lastSent.end()) {
+    const auto next =
+        std::find_if(keys.begin(), keys.end(), [&last](const ServedKey &key) { return key.second > last->second; });
+    std::rotate(keys.begin(), next, keys.end());
+  }
+
   for (const auto &key : keys) {
     const auto found = m_served.find(key);
     if (found != m_served.end() && !pumpServed(key, found->second)) {
@@ -857,6 +911,7 @@ bool FileTransfer::pumpServed(const ServedKey &key, Served &served)
     served.sent += content.size();
     served.readyBytes -= content.size();
     served.ready.pop_front();
+    m_lastSent[channel] = key.second;
   }
 
   if (served.ready.empty() && served.finished) {
@@ -881,16 +936,17 @@ bool FileTransfer::pumpServed(const ServedKey &key, Served &served)
         while (io->nextRoot < io->roots.size() && count < kEntriesPerMessage &&
                result.content.size() < kListingBytesPerMessage) {
           // every entry is answered for, the other computer tells them apart by their position
-          const QFileInfo info(io->roots.at(io->nextRoot));
+          const QString &root = io->roots.at(io->nextRoot);
           ++io->nextRoot;
+          const LocalEntry found = LocalFileSystem::inspect(root);
           ClipboardFileEntry entry;
-          entry.name = info.fileName().toStdString();
-          if (isLink(info) || (!info.isFile() && !info.isDir())) {
+          entry.name = QFileInfo(root).fileName().toStdString();
+          if (found.type != LocalEntry::Type::File && found.type != LocalEntry::Type::Directory) {
             entry.isMissing = true;
           } else {
-            entry.isDirectory = info.isDir();
-            entry.size = entry.isDirectory ? 0 : static_cast<uint64_t>(info.size());
-            entry.modifiedTime = info.lastModified().toSecsSinceEpoch();
+            entry.isDirectory = found.type == LocalEntry::Type::Directory;
+            entry.size = entry.isDirectory ? 0 : found.size;
+            entry.modifiedTime = found.modifiedTime;
           }
           ClipboardFileList::appendEntry(result.content, entry);
           ++count;
@@ -899,14 +955,17 @@ bool FileTransfer::pumpServed(const ServedKey &key, Served &served)
         return result;
       }
 
-      while (io->listing->hasNext() && count < kEntriesPerMessage && result.content.size() < kListingBytesPerMessage) {
-        const QFileInfo info = io->listing->nextFileInfo();
-        if (isLink(info) || (!info.isFile() && !info.isDir())) {
+      QString name;
+      LocalEntry found;
+      while (count < kEntriesPerMessage && result.content.size() < kListingBytesPerMessage &&
+             io->listing->next(name, found)) {
+        // links could lead anywhere, special files have nothing to copy
+        if (found.type != LocalEntry::Type::File && found.type != LocalEntry::Type::Directory) {
           continue;
         }
 
         ClipboardFileEntry entry;
-        entry.name = info.fileName().toStdString();
+        entry.name = name.toStdString();
         if (!ClipboardFileList::isValidName(entry.name)) {
           continue;
         }
@@ -916,13 +975,17 @@ bool FileTransfer::pumpServed(const ServedKey &key, Served &served)
           continue;
         }
 #endif
-        entry.isDirectory = info.isDir();
-        entry.size = entry.isDirectory ? 0 : static_cast<uint64_t>(info.size());
-        entry.modifiedTime = info.lastModified().toSecsSinceEpoch();
+        entry.isDirectory = found.type == LocalEntry::Type::Directory;
+        entry.size = entry.isDirectory ? 0 : found.size;
+        entry.modifiedTime = found.modifiedTime;
         ClipboardFileList::appendEntry(result.content, entry);
         ++count;
       }
-      result.end = !io->listing->hasNext();
+      if (io->listing->failed()) {
+        // the other computer would take a part for the whole
+        return IoResult{false, Error::ReadFailed, "failed to list the directory"};
+      }
+      result.end = io->listing->atEnd();
       return result;
     });
     return true;
@@ -963,6 +1026,14 @@ bool FileTransfer::acceptRemoteFiles(std::string_view fileList, IFileTransferCha
   }
   if (!m_enabled) {
     return false;
+  }
+  {
+    // the files of this computer are asked for here, whoever claims to offer them
+    std::scoped_lock lock{m_registry->mutex};
+    if (m_registry->offers.isOffered(list.offerId)) {
+      LOG_WARN("ignoring a list of copied files that uses the identifier of a list of this computer");
+      return false;
+    }
   }
 
   std::erase_if(m_remoteOffers, [&list](const auto &offer) { return offer.first == list.offerId; });
@@ -1067,6 +1138,10 @@ void FileTransfer::handleResponse(IFileTransferChannel *channel, uint32_t reques
   }
 
   if (mark == Protocol::MarkData) {
+    if (content.empty()) {
+      // carries nothing, and must not keep the reader waiting
+      return;
+    }
     bool tooMuch = false;
     {
       std::scoped_lock lock{request->mutex};
@@ -1110,6 +1185,7 @@ void FileTransfer::channelClosed(IFileTransferChannel *channel)
 {
   std::erase_if(m_served, [channel](const auto &entry) { return entry.first.first == channel; });
   m_unflushed.erase(channel);
+  m_lastSent.erase(channel);
   updateServedCount();
   std::erase_if(m_remoteOffers, [channel](const auto &offer) { return offer.second == channel; });
 

@@ -255,6 +255,7 @@ public:
 private:
   struct ServedIo;
   struct IoResult;
+  struct Registry;
   class Worker;
 
   //! A request of another computer that is being answered
@@ -304,9 +305,8 @@ private:
 
   IEventQueue *m_events = nullptr;
   bool m_enabled = true;
-  //! The registry is also used by the worker thread
-  std::mutex m_registryMutex;
-  FileOfferRegistry m_registry;
+  //! Shared with the worker thread, which may outlive this object
+  std::shared_ptr<Registry> m_registry;
 
   //! Which channel leads to the computer that offers a list, oldest first
   std::vector<std::pair<uint64_t, IFileTransferChannel *>> m_remoteOffers;
@@ -316,6 +316,8 @@ private:
   uint64_t m_nextSerial = 0;
   //! File data written to a channel since it last reported that everything left for the network
   std::map<IFileTransferChannel *, uint64_t> m_unflushed;
+  //! The request that sent file data last on each channel
+  std::map<IFileTransferChannel *, uint32_t> m_lastSent;
   //! Reads the local files, created when the first request arrives
   std::unique_ptr<Worker> m_worker;
 

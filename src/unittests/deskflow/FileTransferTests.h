@@ -25,6 +25,8 @@ private Q_SLOTS:
   void list_largeDirectory();
   void listOffer_tellsWhatBecameOfTheCopiedEntries();
   void list_skipsLinks();
+  void list_unreadableDirectory_fails();
+  void list_shortcutIsAFile();
   void request_outsideOfTheOffer_refused();
   void request_rawPathTricks_refused();
   void request_wrongKindOfEntry_fails();
@@ -32,6 +34,9 @@ private Q_SLOTS:
   void cancel_stopsTheSender();
   void disconnect_failsTheReaderAtOnce();
   void noAnswer_timesOut();
+  void read_twoAtOnce_takeTurns();
+  void emptyData_doesNotKeepTheReaderWaiting();
+  void ownOffer_fromTheOtherComputer_refused();
   void sourceShrinks_readerSeesTheEnd();
   void disabled_nothingIsOfferedOrAnswered();
   void answers_notAskedFor_ignored();

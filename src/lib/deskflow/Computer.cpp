@@ -213,11 +213,14 @@ void Computer::warpCursor(int32_t x, int32_t y)
 
 void Computer::setClipboard(ClipboardID id, const IClipboard *clipboard)
 {
+  // the clipboard of another computer replaces the files copied here, they stay for a paste under way
+  m_fileTransfer->withdrawLocalFiles();
   m_computer->setClipboard(id, clipboard);
 }
 
 void Computer::grabClipboard(ClipboardID id)
 {
+  m_fileTransfer->withdrawLocalFiles();
   m_computer->setClipboard(id, nullptr);
 }
 

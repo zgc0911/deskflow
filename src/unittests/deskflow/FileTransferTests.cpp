@@ -19,6 +19,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QMap>
+#include <QScopeGuard>
 #include <QSet>
 
 #include <atomic>
@@ -28,6 +29,10 @@
 #include <mutex>
 #include <random>
 #include <thread>
+
+#if !defined(Q_OS_WIN)
+#include <unistd.h>
+#endif
 
 using deskflow::ClipboardFileEntry;
 using deskflow::ClipboardFileList;
@@ -542,6 +547,60 @@ void FileTransferTests::list_skipsLinks()
   QVERIFY2(!names.contains("way-out"), "a link was listed");
 }
 
+void FileTransferTests::list_unreadableDirectory_fails()
+{
+#if defined(Q_OS_WIN)
+  QSKIP("access to a directory is taken away with chmod here");
+#else
+  if (geteuid() == 0) {
+    QSKIP("root may read any directory");
+  }
+  QTemporaryDir dir;
+  QVERIFY(dir.isValid());
+  const QDir root(dir.path());
+  QVERIFY(root.mkpath("copied/locked"));
+  QVERIFY(writeFile(root.filePath("copied/locked/inside.txt"), "can not be listed"));
+  const QString locked = root.filePath("copied/locked");
+  const auto restore = qScopeGuard([&locked] {
+    QFile::setPermissions(locked, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+  });
+  QVERIFY(QFile::setPermissions(locked, QFileDevice::Permissions()));
+
+  Link link;
+  const ClipboardFileList list = link.copyOnA({root.filePath("copied").toStdString()});
+  std::vector<ClipboardFileEntry> entries;
+  COMPARE_STATUS(link.remoteOfB->listDirectory(list.offerId, 0, {}, entries), FileTransferStatus::Ok);
+  QCOMPARE(entries.size(), size_t{1});
+  // the other computer must not take it for an empty folder
+  COMPARE_STATUS(link.remoteOfB->listDirectory(list.offerId, 0, "locked", entries), FileTransferStatus::Failed);
+#endif
+}
+
+void FileTransferTests::list_shortcutIsAFile()
+{
+  QTemporaryDir dir;
+  QVERIFY(dir.isValid());
+  const QDir root(dir.path());
+  QVERIFY(root.mkpath("copied"));
+  // Qt takes any file with this extension on Windows for a shortcut, and describes what it leads to
+  const QByteArray bytes = patternBlock(88, 500);
+  QVERIFY(writeFile(root.filePath("copied/program.lnk"), bytes));
+
+  Link link;
+  const ClipboardFileList list = link.copyOnA({root.filePath("copied").toStdString()});
+  std::vector<ClipboardFileEntry> entries;
+  COMPARE_STATUS(link.remoteOfB->listDirectory(list.offerId, 0, {}, entries), FileTransferStatus::Ok);
+  QCOMPARE(entries.size(), size_t{1});
+  QCOMPARE(entries[0].name, std::string("program.lnk"));
+  QVERIFY(!entries[0].isDirectory);
+  QCOMPARE(entries[0].size, uint64_t{500});
+
+  auto reader = link.remoteOfB->openFile(list.offerId, 0, "program.lnk", 0);
+  QByteArray data;
+  COMPARE_STATUS(drain(*reader, &data), FileTransferStatus::Ok);
+  QVERIFY(data == bytes);
+}
+
 void FileTransferTests::request_outsideOfTheOffer_refused()
 {
   Link link;
@@ -788,6 +847,96 @@ void FileTransferTests::noAnswer_timesOut()
   QVERIFY(timer.elapsed() < 3000);
   // and stays failed
   COMPARE_STATUS(drain(*reader), FileTransferStatus::TimedOut);
+}
+
+void FileTransferTests::read_twoAtOnce_takeTurns()
+{
+  QTemporaryDir dir;
+  QVERIFY(dir.isValid());
+  const QDir root(dir.path());
+  QVERIFY(writePattern(root.filePath("long.bin"), 16 * kMiB, 66));
+  QVERIFY(writePattern(root.filePath("short.bin"), Protocol::ChunkSize, 77));
+  Link link;
+  const ClipboardFileList list =
+      link.copyOnA({root.filePath("long.bin").toStdString(), root.filePath("short.bin").toStdString()});
+  QCOMPARE(list.entries.size(), size_t{2});
+  // a slow connection: there is always data of the long file ready to be sent
+  link.aToB.setDataDelay(2);
+
+  QElapsedTimer timer;
+  timer.start();
+  std::atomic<qint64> longDoneAt = -1;
+  std::thread longRead([&] {
+    auto reader = link.remoteOfB->openFile(list.offerId, 0, {}, 0);
+    drain(*reader);
+    longDoneAt = timer.elapsed();
+  });
+  while (link.askedByB.totalData() < 4 * Protocol::ChunkSize && timer.elapsed() < 10000) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+
+  // another paste while the long file is on its way: it gets its turn
+  auto reader = link.remoteOfB->openFile(list.offerId, 1, {}, 0);
+  QByteArray data;
+  COMPARE_STATUS(drain(*reader, &data), FileTransferStatus::Ok);
+  const qint64 shortDoneAt = timer.elapsed();
+  longRead.join();
+  QCOMPARE(data.size(), qsizetype{Protocol::ChunkSize});
+  QVERIFY2(
+      shortDoneAt + 100 < longDoneAt.load(),
+      qPrintable(QStringLiteral("short done after %1 ms, long after %2 ms").arg(shortDoneAt).arg(longDoneAt.load()))
+  );
+}
+
+void FileTransferTests::emptyData_doesNotKeepTheReaderWaiting()
+{
+  Link link;
+  const ClipboardFileList list = link.copyOnA({sourcePath("single.txt").toStdString()});
+  link.loop.call([&] { link.b->setReplyTimeout(300); });
+
+  // the answer is held back, and messages that carry no data keep coming
+  link.aToB.hold();
+  std::atomic<bool> done = false;
+  std::thread feeder([&link, &done] {
+    QElapsedTimer running;
+    running.start();
+    while (!done && running.elapsed() < 4000) {
+      uint32_t id = 0;
+      {
+        std::scoped_lock lock{link.askedByB.mutex};
+        id = link.askedByB.lastRequestId;
+      }
+      if (id != 0) {
+        link.loop.post([&link, id] {
+          std::string nothing;
+          link.b->handleResponse(&link.bToA, id, Protocol::MarkData, nothing);
+        });
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+  });
+
+  QElapsedTimer timer;
+  timer.start();
+  auto reader = link.remoteOfB->openFile(list.offerId, 0, {}, 0);
+  COMPARE_STATUS(drain(*reader), FileTransferStatus::TimedOut);
+  const qint64 waited = timer.elapsed();
+  done = true;
+  feeder.join();
+  QVERIFY2(waited < 3000, qPrintable(QString::number(waited)));
+}
+
+void FileTransferTests::ownOffer_fromTheOtherComputer_refused()
+{
+  Link link;
+  const std::string fileList =
+      link.loop.call([&] { return link.a->offerLocalFiles({sourcePath("single.txt").toStdString()}); });
+  QVERIFY(!fileList.empty());
+
+  // B passes A's own list on as if B offered those files: A asks only itself for them
+  QVERIFY(!link.loop.call([&] { return link.a->acceptRemoteFiles(fileList, &link.aToB); }));
+  // the list is fine for B
+  QVERIFY(link.loop.call([&] { return link.b->acceptRemoteFiles(fileList, &link.bToA); }));
 }
 
 void FileTransferTests::sourceShrinks_readerSeesTheEnd()

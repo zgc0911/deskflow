@@ -187,8 +187,9 @@ struct Monitor
 
 //! One end of a connection between two FileTransfer objects on the same event queue
 /*!
-A message is delivered to the other end by a later event, and each send is
-followed by the event a real connection posts when its output has drained.
+A message is delivered to the other end by a later event. Like a real
+connection, the end reports that its output has drained once everything it
+was given is delivered: right after each message, unless it was made slow.
 */
 class LoopbackChannel : public IFileTransferChannel
 {
@@ -316,18 +317,20 @@ private:
     post(std::move(message));
   }
 
-  void post(std::function<void()> message)
+  void post(std::function<void()> message, bool drained = true)
   {
     m_loop.post([this, message = std::move(message)] {
       if (!m_cut && !m_peerChannel->m_cut) {
         message();
       }
     });
-    m_loop.post([this] {
-      if (!m_cut) {
-        m_local->channelFlushed(this);
-      }
-    });
+    if (drained) {
+      m_loop.post([this] {
+        if (!m_cut) {
+          m_local->channelFlushed(this);
+        }
+      });
+    }
   }
 
   void deliverSlowly()
@@ -345,8 +348,12 @@ private:
       if (delay > 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(delay));
       }
+      lock.lock();
+      // what was sent meanwhile is still on its way
+      const bool drained = m_slowQueue.empty();
+      lock.unlock();
       if (!m_cut) {
-        post(std::move(message));
+        post(std::move(message), drained);
       }
       lock.lock();
     }

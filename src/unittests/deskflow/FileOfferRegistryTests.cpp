@@ -11,9 +11,11 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QProcess>
 
 using deskflow::ClipboardFileList;
 using deskflow::FileOfferRegistry;
+using deskflow::LocalEntry;
 
 namespace {
 
@@ -116,7 +118,7 @@ void FileOfferRegistryTests::offer_skipsMissingLinksAndDuplicates()
   // the indexes other computers use follow the entries that were kept
   QString localPath;
   QCOMPARE(registry.resolve(list.offerId, 1, "b.bin", localPath), FileOfferRegistry::Resolved::Ok);
-  QCOMPARE(localPath, QFileInfo(path("copied/dir/b.bin")).canonicalFilePath());
+  QCOMPARE(localPath, QDir::cleanPath(path("copied/dir/b.bin")));
 }
 
 void FileOfferRegistryTests::offer_nothingUsable_offersNothing()
@@ -155,6 +157,19 @@ void FileOfferRegistryTests::offer_tooManyEntries_offersNothing()
   QVERIFY(ClipboardFileList::unmarshall(atLimit.marshall(), decoded));
 }
 
+void FileOfferRegistryTests::offer_tooManyPaths_notLookedAt()
+{
+  // too many paths are given up on before the files are looked at, even if few exist
+  std::vector<std::string> paths = {stdPath("copied/a.txt"), stdPath("copied/dir")};
+  for (size_t i = paths.size(); i <= ClipboardFileList::s_maxEntries; ++i) {
+    paths.push_back(stdPath(QStringLiteral("copied/not-there-%1").arg(i)));
+  }
+  FileOfferRegistry registry;
+  const ClipboardFileList list = registry.offer(paths);
+  QVERIFY(list.entries.empty());
+  QCOMPARE(list.offerId, uint64_t{0});
+}
+
 void FileOfferRegistryTests::offer_sameFiles_sameIdentifier()
 {
   QTemporaryDir dir;
@@ -162,9 +177,12 @@ void FileOfferRegistryTests::offer_sameFiles_sameIdentifier()
   const QString file = QDir(dir.path()).filePath("grows.txt");
   QVERIFY(writeFile(file, "short"));
 
+  int64_t now = 0;
   FileOfferRegistry registry;
+  registry.setClock([&now] { return now; });
   const std::vector<std::string> paths = {file.toStdString(), stdPath("copied/dir")};
   const ClipboardFileList first = registry.offer(paths);
+  now += FileOfferRegistry::s_reuseLookMs;
   const ClipboardFileList again = registry.offer(paths);
   // the clipboard is only resent when its data changes, so this must be stable
   QCOMPARE(again.offerId, first.offerId);
@@ -174,8 +192,12 @@ void FileOfferRegistryTests::offer_sameFiles_sameIdentifier()
   const ClipboardFileList fewer = registry.offer({file.toStdString()});
   QVERIFY(fewer.offerId != first.offerId);
 
-  // the same path with other contents, another identifier
+  // the same path with other contents, another identifier. offered again right away, for the
+  // other clipboard or as the cursor moves on, the files are not looked at again.
   QVERIFY(writeFile(file, "now a good deal longer than before"));
+  now += FileOfferRegistry::s_reuseLookMs - 1;
+  QCOMPARE(registry.offer({file.toStdString()}).offerId, fewer.offerId);
+  now += 1;
   const ClipboardFileList changed = registry.offer({file.toStdString()});
   QVERIFY(changed.offerId != fewer.offerId);
   QCOMPARE(changed.entries[0].size, uint64_t{34});
@@ -196,17 +218,18 @@ void FileOfferRegistryTests::resolve_findsFilesAndDirectories()
   const ClipboardFileList list = registry.offer({stdPath("copied/a.txt"), stdPath("copied/dir")});
   QString localPath;
 
+  // the paths as they were copied
   QCOMPARE(registry.resolve(list.offerId, 0, "", localPath), FileOfferRegistry::Resolved::Ok);
-  QCOMPARE(localPath, QFileInfo(path("copied/a.txt")).canonicalFilePath());
+  QCOMPARE(localPath, QDir::cleanPath(path("copied/a.txt")));
 
   QCOMPARE(registry.resolve(list.offerId, 1, "", localPath), FileOfferRegistry::Resolved::Ok);
-  QCOMPARE(localPath, QFileInfo(path("copied/dir")).canonicalFilePath());
+  QCOMPARE(localPath, QDir::cleanPath(path("copied/dir")));
 
   QCOMPARE(registry.resolve(list.offerId, 1, "sub", localPath), FileOfferRegistry::Resolved::Ok);
   QVERIFY(QFileInfo(localPath).isDir());
 
   QCOMPARE(registry.resolve(list.offerId, 1, "sub/c.txt", localPath), FileOfferRegistry::Resolved::Ok);
-  QCOMPARE(localPath, QFileInfo(path("copied/dir/sub/c.txt")).canonicalFilePath());
+  QCOMPARE(localPath, QDir::cleanPath(path("copied/dir/sub/c.txt")));
 }
 
 void FileOfferRegistryTests::resolve_badPaths_data()
@@ -233,6 +256,22 @@ void FileOfferRegistryTests::resolve_badPaths_data()
   QTest::newRow("backslash parent") << 1 << QByteArray("..\\a.txt");
   QTest::newRow("drive") << 1 << QByteArray("C:");
   QTest::newRow("stream") << 1 << QByteArray("b.bin:stream");
+  // names of devices, which Windows opens instead of a file
+  QTest::newRow("device") << 1 << QByteArray("nul");
+  QTest::newRow("device with extension") << 1 << QByteArray("CON.txt");
+  QTest::newRow("device and a space") << 1 << QByteArray("aux .log");
+  QTest::newRow("port") << 1 << QByteArray("sub/com1");
+  QTest::newRow("port zero") << 1 << QByteArray("LPT0.txt");
+  QTest::newRow("superscript port") << 1 << QByteArray("com\xc2\xb9");
+  QTest::newRow("console input") << 1 << QByteArray("conin$");
+  // wildcards, and what Windows drops at the end of a name
+  QTest::newRow("star") << 1 << QByteArray("*.bin");
+  QTest::newRow("question mark") << 1 << QByteArray("b.bi?");
+  QTest::newRow("dos wildcard") << 1 << QByteArray("b<bin");
+  QTest::newRow("quote") << 1 << QByteArray("b\".bin");
+  QTest::newRow("pipe") << 1 << QByteArray("b|bin");
+  QTest::newRow("dot at the end") << 1 << QByteArray("b.bin.");
+  QTest::newRow("space at the end") << 1 << QByteArray("b.bin ");
 #endif
 }
 
@@ -269,6 +308,97 @@ void FileOfferRegistryTests::resolve_linkLeadingOutside_rejected()
   QVERIFY(localPath.isEmpty());
   QCOMPARE(registry.resolve(list.offerId, 0, "way-out/s.txt", localPath), FileOfferRegistry::Resolved::BadPath);
   QVERIFY(localPath.isEmpty());
+}
+
+void FileOfferRegistryTests::resolve_linkInside_rejected()
+{
+  if (!m_haveLinks) {
+    QSKIP("symbolic links can not be created here");
+  }
+  QTemporaryDir dir;
+  QVERIFY(dir.isValid());
+  const QDir root(dir.path());
+  QVERIFY(root.mkpath("copied/sub"));
+  QVERIFY(writeFile(root.filePath("copied/sub/c.txt"), "c"));
+  QVERIFY(QFile::link(root.filePath("copied/sub"), root.filePath("copied/to-sub")));
+  QVERIFY(QFile::link(root.filePath("copied/sub/c.txt"), root.filePath("copied/to-c")));
+
+  // links are never listed, so a request through one is made up: refused wherever it leads
+  FileOfferRegistry registry;
+  const ClipboardFileList list = registry.offer({root.filePath("copied").toStdString()});
+  QString localPath;
+  QCOMPARE(registry.resolve(list.offerId, 0, "to-sub/c.txt", localPath), FileOfferRegistry::Resolved::BadPath);
+  QCOMPARE(registry.resolve(list.offerId, 0, "to-sub", localPath), FileOfferRegistry::Resolved::BadPath);
+  QCOMPARE(registry.resolve(list.offerId, 0, "to-c", localPath), FileOfferRegistry::Resolved::BadPath);
+  QCOMPARE(registry.resolve(list.offerId, 0, "sub/c.txt", localPath), FileOfferRegistry::Resolved::Ok);
+
+  // nor is a copied link offered, or a directory that became one since
+  QVERIFY(registry.offer({root.filePath("copied/to-sub").toStdString()}).entries.empty());
+  const ClipboardFileList sub = registry.offer({root.filePath("copied/sub").toStdString()});
+  QCOMPARE(sub.entries.size(), size_t{1});
+  QVERIFY(QDir(root.filePath("copied/sub")).removeRecursively());
+  QVERIFY(QFile::link(root.filePath("copied/to-sub"), root.filePath("copied/sub")));
+  QCOMPARE(registry.resolve(sub.offerId, 0, "", localPath), FileOfferRegistry::Resolved::BadPath);
+}
+
+void FileOfferRegistryTests::resolve_junction_rejected()
+{
+#if !defined(Q_OS_WIN)
+  QSKIP("junctions are made on Windows");
+#else
+  QTemporaryDir dir;
+  QVERIFY(dir.isValid());
+  const QDir root(dir.path());
+  QVERIFY(root.mkpath("copied/inside"));
+  QVERIFY(root.mkpath("secret"));
+  QVERIFY(writeFile(root.filePath("copied/inside/i.txt"), "inside"));
+  QVERIFY(writeFile(root.filePath("secret/s.txt"), "secret"));
+
+  // made by any user, by tools such as pnpm too, and not resolved in a canonical path
+  const auto junction = [&root](const QString &link, const QString &target) {
+    return QProcess::execute(
+        "cmd.exe", {"/c", "mklink", "/J", QDir::toNativeSeparators(root.filePath(link)),
+                    QDir::toNativeSeparators(root.filePath(target))}
+    );
+  };
+  QCOMPARE(junction("copied/data", "secret"), 0);
+  QCOMPARE(junction("copied/again", "copied/inside"), 0);
+  QCOMPARE(deskflow::LocalFileSystem::inspect(root.filePath("copied/data")).type, LocalEntry::Type::Link);
+
+  FileOfferRegistry registry;
+  const ClipboardFileList list = registry.offer({root.filePath("copied").toStdString()});
+  QString localPath;
+  QCOMPARE(registry.resolve(list.offerId, 0, "data", localPath), FileOfferRegistry::Resolved::BadPath);
+  QCOMPARE(registry.resolve(list.offerId, 0, "data/s.txt", localPath), FileOfferRegistry::Resolved::BadPath);
+  QCOMPARE(registry.resolve(list.offerId, 0, "again/i.txt", localPath), FileOfferRegistry::Resolved::BadPath);
+  QCOMPARE(registry.resolve(list.offerId, 0, "inside/i.txt", localPath), FileOfferRegistry::Resolved::Ok);
+  QVERIFY(registry.offer({root.filePath("copied/data").toStdString()}).entries.empty());
+#endif
+}
+
+void FileOfferRegistryTests::offer_shortcut_isAFile()
+{
+  QTemporaryDir dir;
+  QVERIFY(dir.isValid());
+  const QDir root(dir.path());
+  QVERIFY(root.mkpath("folder"));
+  // not a working shortcut, Qt takes any file with this extension for one and describes what it leads to
+  const QByteArray bytes(300, 'L');
+  QVERIFY(writeFile(root.filePath("app.lnk"), bytes));
+  QVERIFY(writeFile(root.filePath("folder/tool.lnk"), bytes));
+
+  // a shortcut is copied as the file it is
+  FileOfferRegistry registry;
+  const ClipboardFileList list =
+      registry.offer({root.filePath("app.lnk").toStdString(), root.filePath("folder").toStdString()});
+  QCOMPARE(list.entries.size(), size_t{2});
+  QCOMPARE(list.entries[0].name, std::string("app.lnk"));
+  QVERIFY(!list.entries[0].isDirectory);
+  QCOMPARE(list.entries[0].size, uint64_t{300});
+  QString localPath;
+  QCOMPARE(registry.resolve(list.offerId, 0, "", localPath), FileOfferRegistry::Resolved::Ok);
+  QCOMPARE(registry.resolve(list.offerId, 1, "tool.lnk", localPath), FileOfferRegistry::Resolved::Ok);
+  QCOMPARE(localPath, QDir::cleanPath(root.filePath("folder/tool.lnk")));
 }
 
 void FileOfferRegistryTests::resolve_missingFile_notFound()

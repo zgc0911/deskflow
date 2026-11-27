@@ -20,12 +20,16 @@ private Q_SLOTS:
   void offer_skipsMissingLinksAndDuplicates();
   void offer_nothingUsable_offersNothing();
   void offer_tooManyEntries_offersNothing();
+  void offer_tooManyPaths_notLookedAt();
   void offer_sameFiles_sameIdentifier();
   void offer_differentRegistries_differentIdentifiers();
   void resolve_findsFilesAndDirectories();
   void resolve_badPaths_data();
   void resolve_badPaths();
   void resolve_linkLeadingOutside_rejected();
+  void resolve_linkInside_rejected();
+  void resolve_junction_rejected();
+  void offer_shortcut_isAFile();
   void resolve_missingFile_notFound();
   void resolve_unknownOffer();
   void replacedOffer_expiresWhenUnused();
