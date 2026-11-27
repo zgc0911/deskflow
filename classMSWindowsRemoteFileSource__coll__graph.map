@@ -1,0 +1,5 @@
+<map id="MSWindowsRemoteFileSource" name="MSWindowsRemoteFileSource">
+<area shape="rect" id="Node000001" title="The files another computer copied, offered as virtual files." alt="" coords="5,78,208,103"/>
+<area shape="rect" id="Node000002" href="$classIMSWindowsVirtualFileSource.html" title="Source of the virtual files placed on the clipboard." alt="" coords="7,5,206,30"/>
+<area shape="poly" id="edge1_Node000001_Node000002" title=" " alt="" coords="108,44,109,79,104,77,105,48"/>
+</map>

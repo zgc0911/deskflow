@@ -1,0 +1,18 @@
+<map id="src/lib/platform/OSXNfsServer.h" name="src/lib/platform/OSXNfsServer.h">
+<area shape="rect" id="Node000001" title=" " alt="" coords="253,5,463,30"/>
+<area shape="rect" id="Node000002" href="$OSXNfsServer_8cpp.html" title=" " alt="" coords="18,85,242,110"/>
+<area shape="poly" id="edge1_Node000001_Node000002" title=" " alt="" coords="308,37,166,87,163,82,312,33"/>
+<area shape="rect" id="Node000003" href="$OSXRemoteFileSystem_8h.html" title=" " alt="" coords="266,78,450,117"/>
+<area shape="poly" id="edge2_Node000001_Node000003" title=" " alt="" coords="359,43,360,79,356,76,357,48"/>
+<area shape="rect" id="Node000008" href="$OSXRemoteFileVolume_8cpp.html" title=" " alt="" coords="468,251,653,290"/>
+<area shape="poly" id="edge8_Node000001_Node000008" title=" " alt="" coords="402,34,435,52,464,76,498,121,525,169,558,252,553,250,521,171,494,123,460,80,432,57,402,39"/>
+<area shape="rect" id="Node000004" href="$OSXRemoteFileSystem_8cpp.html" title=" " alt="" coords="58,165,242,203"/>
+<area shape="poly" id="edge3_Node000003_Node000004" title=" " alt="" coords="296,124,197,166,195,162,300,121"/>
+<area shape="rect" id="Node000005" href="$OSXRemoteFileVolume_8h.html" title=" " alt="" coords="266,165,450,203"/>
+<area shape="poly" id="edge4_Node000003_Node000005" title=" " alt="" coords="360,131,360,165,356,163,356,135"/>
+<area shape="rect" id="Node000006" href="$OSXClipboardFiles_8cpp.html" title=" " alt="" coords="5,251,199,290"/>
+<area shape="poly" id="edge5_Node000005_Node000006" title=" " alt="" coords="289,208,159,253,158,248,284,209"/>
+<area shape="rect" id="Node000007" href="$OSXComputer_8mm.html" title=" " alt="" coords="223,258,445,283"/>
+<area shape="poly" id="edge6_Node000005_Node000007" title=" " alt="" coords="351,217,339,260,335,256,346,220"/>
+<area shape="poly" id="edge7_Node000005_Node000008" title=" " alt="" coords="417,207,518,251,513,251,416,212"/>
+</map>

@@ -1,0 +1,36 @@
+<map id="src/lib/platform/OSXRemoteFileSystem.h" name="src/lib/platform/OSXRemoteFileSystem.h">
+<area shape="rect" id="Node000001" title=" " alt="" coords="301,5,485,44"/>
+<area shape="rect" id="Node000002" href="$ClipboardFileList_8h.html" title=" " alt="" coords="146,92,330,117"/>
+<area shape="poly" id="edge1_Node000001_Node000002" title=" " alt="" coords="358,44,276,87,274,82,353,46"/>
+<area shape="rect" id="Node000004" title=" " alt="" coords="116,165,176,189"/>
+<area shape="poly" id="edge17_Node000001_Node000004" title=" " alt="" coords="298,39,201,61,161,76,136,94,130,106,129,120,136,151,131,150,124,121,125,105,132,90,158,71,200,56,303,36"/>
+<area shape="rect" id="Node000005" title=" " alt="" coords="289,165,342,189"/>
+<area shape="poly" id="edge19_Node000001_Node000005" title=" " alt="" coords="386,43,330,153,327,149,381,45"/>
+<area shape="rect" id="Node000007" title=" " alt="" coords="366,165,422,189"/>
+<area shape="poly" id="edge20_Node000001_Node000007" title=" " alt="" coords="395,43,396,150,392,148,391,46"/>
+<area shape="rect" id="Node000008" href="$OSXNfsServer_8h.html" title=" " alt="" coords="466,92,637,117"/>
+<area shape="poly" id="edge7_Node000001_Node000008" title=" " alt="" coords="432,42,517,85,512,85,431,47"/>
+<area shape="rect" id="Node000012" title=" " alt="" coords="917,165,986,189"/>
+<area shape="poly" id="edge18_Node000001_Node000012" title=" " alt="" coords="467,42,650,89,905,162,900,162,648,95,466,47"/>
+<area shape="rect" id="Node000003" title=" " alt="" coords="201,165,265,189"/>
+<area shape="poly" id="edge2_Node000002_Node000003" title=" " alt="" coords="239,115,237,151,233,148,236,119"/>
+<area shape="poly" id="edge3_Node000002_Node000004" title=" " alt="" coords="226,116,175,158,172,153,221,118"/>
+<area shape="poly" id="edge4_Node000002_Node000005" title=" " alt="" coords="252,115,294,154,289,154,250,120"/>
+<area shape="rect" id="Node000006" title=" " alt="" coords="5,165,93,189"/>
+<area shape="poly" id="edge5_Node000002_Node000006" title=" " alt="" coords="208,120,95,161,93,156,206,115"/>
+<area shape="poly" id="edge6_Node000002_Node000007" title=" " alt="" coords="265,115,357,158,352,158,264,120"/>
+<area shape="poly" id="edge11_Node000008_Node000004" title=" " alt="" coords="464,118,341,139,192,167,192,162,340,134,469,117"/>
+<area shape="poly" id="edge14_Node000008_Node000005" title=" " alt="" coords="515,117,358,166,357,161,510,117"/>
+<area shape="poly" id="edge16_Node000008_Node000007" title=" " alt="" coords="528,117,435,161,433,155,523,118"/>
+<area shape="rect" id="Node000009" title=" " alt="" coords="609,165,660,189"/>
+<area shape="poly" id="edge8_Node000008_Node000009" title=" " alt="" coords="566,115,612,155,607,154,564,120"/>
+<area shape="rect" id="Node000010" title=" " alt="" coords="684,165,744,189"/>
+<area shape="poly" id="edge9_Node000008_Node000010" title=" " alt="" coords="579,115,676,158,671,158,578,120"/>
+<area shape="rect" id="Node000011" title=" " alt="" coords="768,165,892,189"/>
+<area shape="poly" id="edge10_Node000008_Node000011" title=" " alt="" coords="598,115,772,160,767,160,597,120"/>
+<area shape="poly" id="edge12_Node000008_Node000012" title=" " alt="" coords="631,115,904,164,899,164,630,120"/>
+<area shape="rect" id="Node000013" title=" " alt="" coords="447,165,504,189"/>
+<area shape="poly" id="edge13_Node000008_Node000013" title=" " alt="" coords="542,116,500,156,498,152,537,118"/>
+<area shape="rect" id="Node000014" title=" " alt="" coords="528,165,586,189"/>
+<area shape="poly" id="edge15_Node000008_Node000014" title=" " alt="" coords="554,115,557,151,553,148,551,119"/>
+</map>

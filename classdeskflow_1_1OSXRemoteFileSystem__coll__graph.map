@@ -1,0 +1,5 @@
+<map id="deskflow::OSXRemoteFileSystem" name="deskflow::OSXRemoteFileSystem">
+<area shape="rect" id="Node000001" title="The files that other computers have copied, as a tree of read&#45;only directories." alt="" coords="5,78,224,103"/>
+<area shape="rect" id="Node000002" href="$classdeskflow_1_1nfs_1_1IFileSystem.html" title="The files a Server makes available." alt="" coords="27,5,202,30"/>
+<area shape="poly" id="edge1_Node000001_Node000002" title=" " alt="" coords="116,44,117,79,112,77,113,48"/>
+</map>

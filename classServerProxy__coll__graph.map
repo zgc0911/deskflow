@@ -1,0 +1,5 @@
+<map id="ServerProxy" name="ServerProxy">
+<area shape="rect" id="Node000001" title="Proxy for server implementing protocol version 1.6." alt="" coords="59,78,152,103"/>
+<area shape="rect" id="Node000002" href="$classdeskflow_1_1IFileTransferChannel.html" title="Connection to another computer that file transfer messages are sent over." alt="" coords="5,5,206,30"/>
+<area shape="poly" id="edge1_Node000001_Node000002" title=" " alt="" coords="107,44,108,79,103,77,104,48"/>
+</map>

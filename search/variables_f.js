@@ -1,0 +1,21 @@
+var searchData=
+[
+  ['readahead_0',['readAhead',['../structdeskflow_1_1OSXRemoteFileSystem_1_1Limits.html#ae42430382f57f26b594b9cad9abb284b',1,'deskflow::OSXRemoteFileSystem::Limits']]],
+  ['readfds_1',['readfds',['../ArchNetworkWinsock_8cpp.html#afb46b0b697be5d94ec8249a260ac5dfa',1,'ArchNetworkWinsock.cpp']]],
+  ['recentremotehosts_2',['RecentRemoteHosts',['../structSettings_1_1Client.html#a7b4bb7c31fa5c307e197db49145e0231',1,'Settings::Client']]],
+  ['refreshwaitms_3',['refreshWaitMs',['../structdeskflow_1_1OSXRemoteFileSystem_1_1Limits.html#aacab9a96367a3d18e03f0ce9dbc232ed',1,'deskflow::OSXRemoteFileSystem::Limits']]],
+  ['relativemousemoves_4',['RelativeMouseMoves',['../structSettings_1_1Server.html#a17b3ebecbfec7ba5611cd66966b37d4a',1,'Settings::Server::RelativeMouseMoves'],['../structSettings_1_1InternalConfig.html#a7a3f6ca0838333bd6516fe087799a34c',1,'Settings::InternalConfig::RelativeMouseMoves']]],
+  ['relativepath_5',['relativePath',['../structMSWindowsVirtualFileEntry.html#a97a93190f60725cfd68d0a9e53cc4b1f',1,'MSWindowsVirtualFileEntry']]],
+  ['releasekey_6',['ReleaseKey',['../structActionDialog_1_1ActionTypes.html#ae9b80dc375d2f77765ffab6a4461d752',1,'ActionDialog::ActionTypes']]],
+  ['remotehost_7',['RemoteHost',['../structSettings_1_1Client.html#ad698d8035f8fb5bce2e895b5502a590e',1,'Settings::Client']]],
+  ['replytimeoutms_8',['replyTimeoutMs',['../structdeskflow_1_1FileTransferShared.html#a78329865e7169160711f0b59ca5cc2cb',1,'deskflow::FileTransferShared']]],
+  ['requestlist_9',['RequestList',['../structdeskflow_1_1FileTransfer_1_1Protocol.html#ae7157dc969ad2e0b11f4a1dc3f2b3a68',1,'deskflow::FileTransfer::Protocol']]],
+  ['requestread_10',['RequestRead',['../structdeskflow_1_1FileTransfer_1_1Protocol.html#a21fb236b0ae200cb4aa21da8073bbefa',1,'deskflow::FileTransfer::Protocol']]],
+  ['requests_11',['requests',['../structdeskflow_1_1FileTransferShared.html#aea57ccbed1f4f9668d214b2145307502',1,'deskflow::FileTransferShared']]],
+  ['reserved1_12',['reserved1',['../structCBMPHeader.html#affa5707b2cb1ea213497ddd409132bca',1,'CBMPHeader']]],
+  ['reserved2_13',['reserved2',['../structCBMPHeader.html#a0a701986061e90b66bece5b02b9bd10a',1,'CBMPHeader']]],
+  ['restartserver_14',['RestartServer',['../structSettingsKeys.html#a8c94b6e9d9359fea262c8a2ecd6940ca',1,'SettingsKeys::RestartServer'],['../structActionDialog_1_1ActionTypes.html#acec85eeb9a024dc66e36c1859e2636d7',1,'ActionDialog::ActionTypes::RestartServer']]],
+  ['retries_15',['retries',['../structdeskflow_1_1OSXRemoteFileSystem_1_1Limits.html#ad4c53f6b81c3065ee28b9d06778bf4ef',1,'deskflow::OSXRemoteFileSystem::Limits']]],
+  ['retryafterms_16',['retryAfterMs',['../structdeskflow_1_1OSXRemoteFileVolume_1_1Options.html#a423aa25638d450af3b82a92dd648ac24',1,'deskflow::OSXRemoteFileVolume::Options']]],
+  ['roots_17',['roots',['../structdeskflow_1_1FileTransfer_1_1ServedIo.html#ac03adbe451b72d03f3c9f7f2dbdaaa50',1,'deskflow::FileTransfer::ServedIo']]]
+];

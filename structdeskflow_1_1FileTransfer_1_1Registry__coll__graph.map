@@ -1,0 +1,5 @@
+<map id="deskflow::FileTransfer::Registry" name="deskflow::FileTransfer::Registry">
+<area shape="rect" id="Node000001" title="The files this computer offers, used by the thread of the event queue and the worker thread." alt="" coords="20,100,169,139"/>
+<area shape="rect" id="Node000002" href="$classdeskflow_1_1FileOfferRegistry.html" title="The files this computer currently offers to other computers." alt="" coords="5,5,184,30"/>
+<area shape="poly" id="edge1_Node000001_Node000002" title=" " alt="" coords="97,44,97,100,92,99,92,47"/>
+</map>

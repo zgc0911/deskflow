@@ -1,0 +1,11 @@
+<map id="Data Messages" name="Data Messages">
+<area shape="rect" id="Node000005" href="$group__protocol__clipboard.html" title="Clipboard data synchronization messages." alt="" coords="418,5,559,30"/>
+<area shape="rect" id="Node000008" href="$group__protocol__clipboard__files.html" title="Reading files that another computer has copied to its clipboard." alt="" coords="406,55,571,79"/>
+<area shape="rect" id="Node000001" title="Input events, clipboard data, and file transfer messages." alt="" coords="246,153,358,178"/>
+<area shape="rect" id="Node000007" href="$group__protocol__files.html" title="File transfer and drag&#45;and&#45;drop messages (v1.5+)." alt="" coords="410,104,567,129"/>
+<area shape="rect" id="Node000006" href="$group__protocol__info.html" title="Computer information and configuration messages." alt="" coords="414,153,564,178"/>
+<area shape="rect" id="Node000003" href="$group__protocol__keyboard.html" title="Keyboard input event messages." alt="" coords="419,203,558,227"/>
+<area shape="rect" id="Node000004" href="$group__protocol__mouse.html" title="Mouse input event messages." alt="" coords="426,252,551,277"/>
+<area shape="rect" id="Node000009" href="$group__protocol__system.html" title="System&#45;level notifications and synchronization." alt="" coords="424,301,553,326"/>
+<area shape="rect" id="Node000002" href="$group__protocol__messages.html" title="All protocol message types and their format specifications." alt="" coords="5,153,198,178"/>
+</map>
