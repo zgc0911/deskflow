@@ -66,6 +66,8 @@ if(WIN32)
     MSWindowsScreenSaver.h
     MSWindowsSession.cpp
     MSWindowsSession.h
+    MSWindowsVirtualFileDataObject.cpp
+    MSWindowsVirtualFileDataObject.h
     MSWindowsWatchdog.cpp
     MSWindowsWatchdog.h
   )
