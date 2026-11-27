@@ -19,7 +19,13 @@ OSXClipboardFiles::OSXClipboardFiles(
 {
 }
 
-OSXClipboardFiles::~OSXClipboardFiles() = default;
+OSXClipboardFiles::~OSXClipboardFiles()
+{
+  // what the user copied since stays
+  if (holdsOwnWrite()) {
+    m_pasteboard->clear();
+  }
+}
 
 deskflow::OSXRemoteFileVolume &OSXClipboardFiles::volume()
 {
@@ -96,4 +102,9 @@ bool OSXClipboardFiles::get(std::vector<std::string> &paths) const
 bool OSXClipboardFiles::holdsOwnWrite() const
 {
   return m_writtenAt >= 0 && m_pasteboard->changeCount() == m_writtenAt;
+}
+
+long OSXClipboardFiles::changeCount() const
+{
+  return m_pasteboard->changeCount();
 }

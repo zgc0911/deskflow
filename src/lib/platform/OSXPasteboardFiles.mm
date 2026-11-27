@@ -31,6 +31,13 @@ OSXPasteboardFiles::OSXPasteboardFiles(bool ownPasteboard) : m_own(ownPasteboard
   }
 }
 
+OSXPasteboardFiles::OSXPasteboardFiles(const std::string &name, bool releaseWhenDone) : m_own(releaseWhenDone)
+{
+  @autoreleasepool {
+    m_pasteboard = [[NSPasteboard pasteboardWithName:[NSString stringWithUTF8String:name.c_str()]] retain];
+  }
+}
+
 OSXPasteboardFiles::~OSXPasteboardFiles()
 {
   @autoreleasepool {
@@ -94,6 +101,13 @@ long OSXPasteboardFiles::changeCount() const
 {
   @autoreleasepool {
     return static_cast<long>(pasteboardOf(m_pasteboard).changeCount);
+  }
+}
+
+void OSXPasteboardFiles::clear()
+{
+  @autoreleasepool {
+    [pasteboardOf(m_pasteboard) clearContents];
   }
 }
 

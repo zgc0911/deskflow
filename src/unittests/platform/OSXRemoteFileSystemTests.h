@@ -33,6 +33,8 @@ private Q_SLOTS:
   void directoryChangedAfterCopy_isSeenInANewSession();
   void names_thatCanNotBeUsed_areLeftOut();
   void olderLists_areDropped();
+  void olderLists_beingPasted_areKept();
+  void directory_changed_getsAnotherVersion();
   void bigDirectory_isReadInPages();
   void shutdown_wakesWhoeverWaits();
   void interrupt_failsWhoWaits_laterCallsWork();

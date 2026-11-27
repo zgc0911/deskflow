@@ -849,12 +849,17 @@ bool OSXComputer::setClipboard(ClipboardID, const IClipboard *src)
 
 bool OSXComputer::setClipboardFiles(const IClipboard *src)
 {
-  if (m_clipboardFiles == nullptr || !m_clipboardFiles->put(*src)) {
+  if (m_clipboardFiles == nullptr) {
     return false;
   }
-  // done by this process: the next check must not take it for something the user copied
-  m_pasteboard.synchronize();
-  return true;
+  const long before = m_clipboardFiles->changeCount();
+  const bool put = m_clipboardFiles->put(*src);
+  // done by this process, also when it failed after emptying the pasteboard: the next check must
+  // not take it for something the user copied
+  if (put || m_clipboardFiles->changeCount() != before) {
+    m_pasteboard.synchronize();
+  }
+  return put;
 }
 
 bool OSXComputer::getClipboardFiles(ClipboardID, std::vector<std::string> &paths) const

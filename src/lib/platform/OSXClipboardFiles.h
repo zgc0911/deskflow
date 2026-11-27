@@ -33,6 +33,7 @@ public:
   OSXClipboardFiles(
       std::unique_ptr<OSXPasteboardFiles> pasteboard, std::unique_ptr<deskflow::OSXRemoteFileVolume> volume
   );
+  //! Files this put on the pasteboard are taken off, they can't be pasted once the volume is gone
   ~OSXClipboardFiles();
   OSXClipboardFiles(OSXClipboardFiles const &) = delete;
   OSXClipboardFiles &operator=(OSXClipboardFiles const &) = delete;
@@ -54,6 +55,9 @@ public:
 
   //! True if the pasteboard holds what put() wrote, not something the user copied since
   bool holdsOwnWrite() const;
+
+  //! Counts the changes of the pasteboard
+  long changeCount() const;
 
   deskflow::OSXRemoteFileVolume &volume();
 

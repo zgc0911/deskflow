@@ -10,7 +10,9 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cstdlib>
 #include <cstring>
+#include <system_error>
 
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -48,6 +50,12 @@ const uint32_t kMaxRecordSize = 256 * 1024;
 
 //! Calls answered at the same time, more wait for their turn
 const int kMaxRunningCalls = 48;
+
+//! Connections at the same time, the system's client makes one or two
+const size_t kMaxConnections = 8;
+
+//! How long accepting connections pauses when something ran out
+const int kAcceptRetryMs = 100;
 
 const uint64_t kFileSystemId = 0x44464c57; // "DFLW"
 const uint32_t kDirectoryListingOverhead = 256;
@@ -312,6 +320,21 @@ struct Server::Connection
 
 Server::Server(IFileSystem &fileSystem) : m_fileSystem(fileSystem)
 {
+  arc4random_buf(m_mask.data(), m_mask.size());
+}
+
+FileHandle Server::outward(const FileHandle &handle) const
+{
+  FileHandle told{};
+  for (size_t i = 0; i < handle.size(); ++i) {
+    told[i] = handle[i] ^ m_mask[i];
+  }
+  return told;
+}
+
+FileHandle Server::inward(const FileHandle &handle) const
+{
+  return outward(handle);
 }
 
 Server::~Server()
@@ -360,7 +383,18 @@ bool Server::start(const std::string &exportPath)
 
   m_listenSocket = listener;
   m_port = ntohs(address.sin_port);
-  m_acceptThread = std::thread([this] { acceptLoop(); });
+  try {
+    m_acceptThread = std::thread([this] { acceptLoop(); });
+  } catch (const std::system_error &error) {
+    LOG_ERR("can't start the file volume server: %s", error.what());
+    ::close(listener);
+    ::close(m_wakePipe[0]);
+    ::close(m_wakePipe[1]);
+    m_listenSocket = -1;
+    m_wakePipe[0] = m_wakePipe[1] = -1;
+    m_port = 0;
+    return false;
+  }
   LOG_DEBUG("file volume server listens on port %d", m_port);
   return true;
 }
@@ -445,6 +479,14 @@ void Server::acceptLoop()
       if (errno == EINTR || errno == ECONNABORTED) {
         continue;
       }
+      if (errno == EMFILE || errno == ENFILE || errno == ENOBUFS || errno == ENOMEM) {
+        // ran out of something for a moment, the system's client needs this to connect again
+        LOG_WARN("the file volume server can't accept a connection now: %s", strerror(errno));
+        pollfd wake = {m_wakePipe[0], POLLIN, 0};
+        ::poll(&wake, 1, kAcceptRetryMs);
+        continue;
+      }
+      LOG_ERR("the file volume server stopped accepting connections: %s", strerror(errno));
       break;
     }
 
@@ -458,16 +500,27 @@ void Server::acceptLoop()
     if (m_stopping) {
       break;
     }
+    if (m_connections.size() >= kMaxConnections) {
+      // closed as it goes, this is not the system's client
+      LOG_WARN("refusing a connection to the file volume, there are too many");
+      continue;
+    }
     m_connections.push_back(connection);
     ++m_threads;
-    std::thread([this, connection] {
-      receiveLoop(connection);
-      {
-        std::scoped_lock forget{m_mutex};
-        std::erase(m_connections, connection);
-      }
-      threadEnded();
-    }).detach();
+    try {
+      std::thread([this, connection] {
+        receiveLoop(connection);
+        {
+          std::scoped_lock forget{m_mutex};
+          std::erase(m_connections, connection);
+        }
+        threadEnded();
+      }).detach();
+    } catch (const std::system_error &error) {
+      LOG_ERR("can't take a connection to the file volume: %s", error.what());
+      std::erase(m_connections, connection);
+      --m_threads;
+    }
   }
 }
 
@@ -507,14 +560,27 @@ void Server::receiveLoop(const std::shared_ptr<Connection> &connection)
     ++m_runningCalls;
     ++m_threads;
     lock.unlock();
-    std::thread([this, connection, record = std::move(record)]() mutable {
-      handleRecord(connection, std::move(record));
+    try {
+      std::thread([this, connection, record = std::move(record)]() mutable {
+        handleRecord(connection, std::move(record));
+        {
+          std::scoped_lock done{m_mutex};
+          --m_runningCalls;
+        }
+        threadEnded();
+      }).detach();
+    } catch (const std::system_error &error) {
+      LOG_ERR("can't answer a call to the file volume: %s", error.what());
       {
-        std::scoped_lock done{m_mutex};
+        std::scoped_lock undo{m_mutex};
         --m_runningCalls;
+        --m_threads;
+        m_changed.notify_all();
       }
-      threadEnded();
-    }).detach();
+      // the system's client sends it again on a new connection
+      ::shutdown(connection->socket, SHUT_RDWR);
+      return;
+    }
   }
 }
 
@@ -542,7 +608,7 @@ std::string Server::handleCall(const std::string &record)
   const uint32_t program = in.u32();
   const uint32_t version = in.u32();
   const uint32_t procedure = in.u32();
-  // who calls: not checked, nothing but this computer's own client can connect and find a handle
+  // who calls is not looked at: mount_nfs says root whoever runs it, and any client can say anything
   in.u32();
   in.opaque(400);
   in.u32();
@@ -595,13 +661,18 @@ bool Server::mountCall(uint32_t procedure, XdrReader &arguments, XdrWriter &resu
     if (!arguments.ok()) {
       return true;
     }
-    if (!m_mountAllowed || path != m_exportPath) {
-      LOG_WARN("refusing a request to mount the file volume");
+    // answered once, for the mount this process sets up with the path it was given. should another
+    // client get there first, that mount fails and the volume is mounted again with new handles.
+    const bool rightPath = path == m_exportPath;
+    if (!rightPath || !m_mountAllowed.exchange(false)) {
+      LOG_WARN(
+          "refusing a request to mount the file volume, %s", rightPath ? "it was mounted already" : "unknown path"
+      );
       result.u32(kMountAccessDenied);
       return true;
     }
     result.u32(0);
-    result.handle(m_fileSystem.rootHandle());
+    result.handle(outward(m_fileSystem.rootHandle()));
     // how callers may identify themselves
     result.u32(1);
     result.u32(kAuthSys);
@@ -676,6 +747,7 @@ bool Server::nfsCall(uint32_t procedure, XdrReader &arguments, XdrWriter &result
     }
     return true;
   }
+  handle = inward(handle);
 
   switch (procedure) {
   case 1: { // get attributes
@@ -704,7 +776,7 @@ bool Server::nfsCall(uint32_t procedure, XdrReader &arguments, XdrWriter &result
     }
     result.status(status);
     if (status == Status::Ok) {
-      result.handle(found);
+      result.handle(outward(found));
       result.boolean(true);
       putAttributes(result, attributes);
     }
@@ -758,7 +830,7 @@ bool Server::nfsCall(uint32_t procedure, XdrReader &arguments, XdrWriter &result
   case 17: { // read directory with attributes
     const bool plus = (procedure == 17);
     const uint64_t cookie = arguments.u64();
-    arguments.fixed(8);
+    const uint64_t verifier = arguments.u64();
     if (plus) {
       arguments.u32();
     }
@@ -773,6 +845,7 @@ bool Server::nfsCall(uint32_t procedure, XdrReader &arguments, XdrWriter &result
     Attributes own;
     std::vector<DirectoryEntry> entries;
     bool complete = true;
+    uint64_t version = 0;
     Status status = m_fileSystem.getAttributes(handle, own);
     if (status == Status::Ok && !own.isDirectory) {
       status = Status::NotDirectory;
@@ -780,7 +853,12 @@ bool Server::nfsCall(uint32_t procedure, XdrReader &arguments, XdrWriter &result
     if (status == Status::Ok) {
       // more than fits, the rest is asked for with the cookie of the last entry that did
       const uint64_t first = (cookie > 2) ? cookie - 2 : 0;
-      status = m_fileSystem.readDirectory(handle, first, budget / kSmallestDirectoryEntry + 1, entries, complete);
+      status =
+          m_fileSystem.readDirectory(handle, first, budget / kSmallestDirectoryEntry + 1, entries, complete, version);
+    }
+    // a cookie is a position in the directory as it was when the client got it
+    if (status == Status::Ok && cookie != 0 && verifier != version) {
+      status = Status::BadCookie;
     }
     result.status(status);
     putOptionalAttributes(result, m_fileSystem, handle);
@@ -800,9 +878,8 @@ bool Server::nfsCall(uint32_t procedure, XdrReader &arguments, XdrWriter &result
       }
     }
 
-    // the listing is always the same, so there is nothing to verify
-    const uint8_t verifier[8] = {};
-    result.fixed(verifier, sizeof(verifier));
+    // tells the client which version of the directory its cookies are positions in
+    result.u64(version);
 
     XdrWriter list;
     for (const DirectoryEntry &entry : entries) {
@@ -815,7 +892,7 @@ bool Server::nfsCall(uint32_t procedure, XdrReader &arguments, XdrWriter &result
         item.boolean(true);
         putAttributes(item, entry.attributes);
         item.boolean(true);
-        item.handle(entry.handle);
+        item.handle(outward(entry.handle));
       }
       if (list.size() + item.size() > budget) {
         complete = false;

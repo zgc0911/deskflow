@@ -51,6 +51,8 @@ const char *statusName(Status status)
     return "Stale";
   case Status::BadHandle:
     return "BadHandle";
+  case Status::BadCookie:
+    return "BadCookie";
   case Status::TryLater:
     return "TryLater";
   }
@@ -203,7 +205,8 @@ struct Paste
     for (;;) {
       std::vector<DirectoryEntry> entries;
       bool complete = false;
-      const Status status = files->readDirectory(directory, first, page, entries, complete);
+      uint64_t version = 0;
+      const Status status = files->readDirectory(directory, first, page, entries, complete, version);
       if (status != Status::Ok) {
         return status;
       }
@@ -728,6 +731,8 @@ void OSXRemoteFileSystemTests::olderLists_areDropped()
   const FileHandle firstHandle = paste.handleOf(first[0]);
   QVERIFY(paste.copy({sourcePath("tree/empty.bin")}));
   const std::vector<std::string> second = paste.shown;
+  // left alone for a moment, the first list is no longer in use
+  pause(paste.limits);
   QVERIFY(paste.copy({sourcePath("tree/nested")}));
 
   FileHandle handle;
@@ -739,6 +744,73 @@ void OSXRemoteFileSystemTests::olderLists_areDropped()
   QStringList names;
   COMPARE_STATUS(paste.names(paste.files->rootHandle(), names), Status::Ok);
   QCOMPARE(names.size(), 2);
+}
+
+void OSXRemoteFileSystemTests::olderLists_beingPasted_areKept()
+{
+  auto limits = quickLimits();
+  limits.offers = 2;
+  Paste paste(limits);
+
+  // the first list is being pasted from when the third arrives: the second goes instead
+  QVERIFY(paste.copy({sourcePath("tree/a.txt")}));
+  const std::vector<std::string> first = paste.shown;
+  const FileHandle firstHandle = paste.handleOf(first[0]);
+  QVERIFY(paste.copy({sourcePath("tree/empty.bin")}));
+  const std::vector<std::string> second = paste.shown;
+  QVERIFY(paste.copy({sourcePath("tree/nested")}));
+  const std::vector<std::string> third = paste.shown;
+
+  Attributes attributes;
+  COMPARE_STATUS(paste.files->getAttributes(firstHandle, attributes), Status::Ok);
+  QByteArray data;
+  COMPARE_STATUS(paste.readAll(firstHandle, data), Status::Ok);
+  QCOMPARE(data, contentsOf(sourcePath("tree/a.txt")));
+  FileHandle handle;
+  COMPARE_STATUS(paste.find(second[0], handle, attributes), Status::NoEntry);
+  COMPARE_STATUS(paste.find(third[0], handle, attributes), Status::Ok);
+
+  // once the paste is over, the next list takes its place
+  pause(paste.limits);
+  QVERIFY(paste.copy({sourcePath(QStringLiteral("tree/中文.txt"))}));
+  COMPARE_STATUS(paste.files->getAttributes(firstHandle, attributes), Status::Stale);
+  QStringList names;
+  COMPARE_STATUS(paste.names(paste.files->rootHandle(), names), Status::Ok);
+  QCOMPARE(names.size(), 2);
+}
+
+void OSXRemoteFileSystemTests::directory_changed_getsAnotherVersion()
+{
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QDir changing(QDir(directory.path()).filePath("changing"));
+  QVERIFY(QDir().mkpath(changing.path()));
+  QVERIFY(writeFile(changing.filePath("a.txt"), "a"));
+  QVERIFY(writeFile(changing.filePath("b.txt"), "b"));
+
+  Paste paste;
+  QVERIFY(paste.copy({changing.path()}));
+  const FileHandle folder = paste.handleOf(paste.shownPath(0));
+  const auto versionNow = [&](uint64_t &version) {
+    std::vector<DirectoryEntry> entries;
+    bool complete = false;
+    return paste.files->readDirectory(folder, 0, 10, entries, complete, version);
+  };
+  uint64_t first = 0;
+  COMPARE_STATUS(versionNow(first), Status::Ok);
+
+  // listed again unchanged, the positions are still good
+  pause(paste.limits);
+  uint64_t again = 0;
+  COMPARE_STATUS(versionNow(again), Status::Ok);
+  QCOMPARE(again, first);
+
+  // an entry gone, the ones after it moved up: positions of before mean something else
+  QVERIFY(QFile::remove(changing.filePath("a.txt")));
+  pause(paste.limits);
+  uint64_t changed = 0;
+  COMPARE_STATUS(versionNow(changed), Status::Ok);
+  QVERIFY(changed != first);
 }
 
 void OSXRemoteFileSystemTests::bigDirectory_isReadInPages()
@@ -764,7 +836,8 @@ void OSXRemoteFileSystemTests::bigDirectory_isReadInPages()
   // a page that starts past the end is empty and complete
   std::vector<DirectoryEntry> entries;
   bool complete = false;
-  COMPARE_STATUS(paste.files->readDirectory(folder, 600, 10, entries, complete), Status::Ok);
+  uint64_t version = 0;
+  COMPARE_STATUS(paste.files->readDirectory(folder, 600, 10, entries, complete, version), Status::Ok);
   QVERIFY(entries.empty());
   QVERIFY(complete);
 }

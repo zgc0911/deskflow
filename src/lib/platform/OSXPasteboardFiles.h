@@ -21,6 +21,12 @@ class OSXPasteboardFiles
 public:
   //! The general pasteboard, or one of its own that is thrown away with this object
   explicit OSXPasteboardFiles(bool ownPasteboard = false);
+
+  //! A pasteboard with a name, which another object can use too. For tests.
+  /*!
+  \p releaseWhenDone throws it away with this object.
+  */
+  OSXPasteboardFiles(const std::string &name, bool releaseWhenDone);
   ~OSXPasteboardFiles();
   OSXPasteboardFiles(OSXPasteboardFiles const &) = delete;
   OSXPasteboardFiles &operator=(OSXPasteboardFiles const &) = delete;
@@ -38,6 +44,9 @@ public:
 
   //! Counts the changes of the pasteboard, write() returns the count it made, or -1 if it failed
   long changeCount() const;
+
+  //! Take everything off the pasteboard
+  void clear();
 
   //! Replace what is on the pasteboard with text, as another program would. For tests.
   void writeText(const std::string &text);

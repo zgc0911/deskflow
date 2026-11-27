@@ -124,10 +124,14 @@ struct Node
   Clock::time_point failedAt{};
   std::vector<uint64_t> children;
   std::map<std::string, uint64_t> byName;
+  //! Changes whenever \c children change, positions in a listing are those of one version
+  uint64_t version = 1;
 
   // for the directory of a list: a session is a run of calls with no long pause in it
   Clock::time_point lastUsed{};
   Clock::time_point sessionStart{};
+  //! When a call last came for anything of the list
+  Clock::time_point calledAt{};
 };
 
 //! A download of one file, from some position towards its end
@@ -255,7 +259,14 @@ struct OSXRemoteFileSystem::State : std::enable_shared_from_this<OSXRemoteFileSy
   {
     if (Node *offer = find(node.offer); offer != nullptr) {
       offer->lastUsed = now;
+      offer->calledAt = now;
     }
+  }
+
+  //! Whether a list is being pasted from: a read waits for it, or a call came a moment ago
+  bool isInUse(const Node &offer, Clock::time_point now) const
+  {
+    return isBeingRead(offer.id) || now - offer.calledAt < milliseconds(limits.freshMs);
   }
 
   //! Whether a read waits for the data of a file of a list
@@ -284,6 +295,7 @@ struct OSXRemoteFileSystem::State : std::enable_shared_from_this<OSXRemoteFileSy
       }
     }
     offer->lastUsed = now;
+    offer->calledAt = now;
   }
 
   //! Whether a listing dates from before the current session
@@ -332,6 +344,7 @@ struct OSXRemoteFileSystem::State : std::enable_shared_from_this<OSXRemoteFileSy
   {
     const bool topLevel = (directory.kind == Node::Kind::Offer);
     std::map<std::string, uint64_t> before = std::move(directory.byName);
+    const std::vector<uint64_t> previous = std::move(directory.children);
     directory.byName.clear();
     directory.children.clear();
 
@@ -382,6 +395,10 @@ struct OSXRemoteFileSystem::State : std::enable_shared_from_this<OSXRemoteFileSy
     if (unusable > 0) {
       LOG_DEBUG("%d copied files can't be shown here, their names are too long or not valid", unusable);
     }
+    if (directory.children != previous) {
+      // the positions a client got before mean something else now
+      ++directory.version;
+    }
     directory.listing = Node::Listing::Done;
     directory.listedAt = now;
   }
@@ -431,6 +448,9 @@ struct OSXRemoteFileSystem::State : std::enable_shared_from_this<OSXRemoteFileSy
     const std::vector<uint64_t> children = directory->children;
     directory->children.clear();
     directory->byName.clear();
+    if (!children.empty()) {
+      ++directory->version;
+    }
     directory->listing = Node::Listing::Failed;
     directory->failure = statusOf(status);
     directory->failedAt = now;
@@ -864,6 +884,7 @@ std::vector<std::string> OSXRemoteFileSystem::addOffer(const ClipboardFileList &
     root->children.push_back(offer->id);
     root->byName.emplace(directoryName, offer->id);
     root->modifiedTime = offer->modifiedTime;
+    ++root->version;
   } else {
     // the one that was copied last is dropped last
     std::erase(state.offers, offer->id);
@@ -878,14 +899,24 @@ std::vector<std::string> OSXRemoteFileSystem::addOffer(const ClipboardFileList &
   offer->sessionStart = now;
   offer->lastUsed = now;
 
-  while (state.offers.size() > state.limits.offers) {
-    const uint64_t oldest = state.offers.front();
-    state.offers.erase(state.offers.begin());
-    if (const Node *gone = state.find(oldest); gone != nullptr) {
-      root->byName.erase(gone->name);
+  // too many lists: the oldest go first, but not one that is being pasted from, unless there are
+  // twice as many. that one goes once it is left alone and another list arrives.
+  for (auto next = state.offers.begin(); state.offers.size() > state.limits.offers && next != state.offers.end();) {
+    const uint64_t id = *next;
+    const Node *candidate = state.find(id);
+    const bool keep = id == offer->id || (candidate != nullptr && state.offers.size() <= 2 * state.limits.offers &&
+                                          state.isInUse(*candidate, now));
+    if (keep) {
+      ++next;
+      continue;
     }
-    std::erase(root->children, oldest);
-    state.remove(oldest);
+    next = state.offers.erase(next);
+    if (candidate != nullptr) {
+      root->byName.erase(candidate->name);
+    }
+    std::erase(root->children, id);
+    ++root->version;
+    state.remove(id);
   }
 
   for (const uint64_t id : offer->children) {
@@ -1033,11 +1064,12 @@ nfs::Status OSXRemoteFileSystem::lookup(
 
 nfs::Status OSXRemoteFileSystem::readDirectory(
     const nfs::FileHandle &directory, uint64_t first, size_t limit, std::vector<nfs::DirectoryEntry> &entries,
-    bool &complete
+    bool &complete, uint64_t &version
 )
 {
   entries.clear();
   complete = true;
+  version = 0;
 
   State &state = *m_state;
   State::Lock lock{state.mutex};
@@ -1061,6 +1093,7 @@ nfs::Status OSXRemoteFileSystem::readDirectory(
     return nfs::Status::Stale;
   }
 
+  version = parent->version;
   uint64_t position = first;
   for (; position < parent->children.size() && entries.size() < limit; ++position) {
     const Node *child = state.find(parent->children[static_cast<size_t>(position)]);

@@ -13,6 +13,7 @@
 
 #include <QElapsedTimer>
 #include <QProcess>
+#include <QTemporaryDir>
 
 #include <atomic>
 #include <cstring>
@@ -243,7 +244,20 @@ public:
     if (u32(4) != 1 || u32(8) != 0 || u32(20) != 0) {
       return -1;
     }
+    m_result = (size >= 28) ? reply.mid(28) : QByteArray();
     return (size >= 28) ? static_cast<int64_t>(u32(24)) : 0;
+  }
+
+  //! What followed the status in the last reply
+  const QByteArray &result() const
+  {
+    return m_result;
+  }
+
+  static void appendU64(QByteArray &data, uint64_t value)
+  {
+    appendU32(data, static_cast<uint32_t>(value >> 32));
+    appendU32(data, static_cast<uint32_t>(value));
   }
 
   static void appendU32(QByteArray &data, uint32_t value)
@@ -282,6 +296,69 @@ private:
   int m_socket = -1;
   bool m_connected = false;
   uint32_t m_xid = 0;
+  QByteArray m_result;
+};
+
+//! Takes apart what a reply holds
+class ReplyReader
+{
+public:
+  explicit ReplyReader(const QByteArray &data) : m_data(data)
+  {
+  }
+
+  bool ok() const
+  {
+    return m_ok;
+  }
+
+  uint32_t u32()
+  {
+    if (m_data.size() - m_position < 4) {
+      m_ok = false;
+      return 0;
+    }
+    const auto *bytes = reinterpret_cast<const uint8_t *>(m_data.constData() + m_position);
+    m_position += 4;
+    return (static_cast<uint32_t>(bytes[0]) << 24) | (static_cast<uint32_t>(bytes[1]) << 16) |
+           (static_cast<uint32_t>(bytes[2]) << 8) | bytes[3];
+  }
+
+  uint64_t u64()
+  {
+    const uint64_t high = u32();
+    return (high << 32) | u32();
+  }
+
+  QByteArray opaque()
+  {
+    const qsizetype size = u32();
+    if (!m_ok || m_data.size() - m_position < size) {
+      m_ok = false;
+      return {};
+    }
+    const QByteArray value = m_data.mid(m_position, size);
+    m_position += size + (4 - size % 4) % 4;
+    return value;
+  }
+
+  void skip(qsizetype bytes)
+  {
+    m_position = std::min(m_position + bytes, m_data.size());
+  }
+
+  //! Attributes that may follow
+  void skipAttributes()
+  {
+    if (u32() != 0) {
+      skip(84);
+    }
+  }
+
+private:
+  const QByteArray &m_data;
+  qsizetype m_position = 0;
+  bool m_ok = true;
 };
 
 const uint32_t kMountProgram = 100005;
@@ -562,7 +639,8 @@ void OSXRemoteFileVolumeTests::otherClients_areTurnedAway()
   // nothing is ever written
   QCOMPARE(client.call(kNfsProgram, 7, RpcClient::opaque(QByteArray(16, '\x01'))), 30);
 
-  // a server that has not been mounted yet lets in only who knows the path
+  // a server that has not been mounted yet answers one mount request, from who knows the path first.
+  // should that be another client, the mount of this process fails and is made again.
   OSXRemoteFileSystem files(pasting.link.remoteOfB);
   deskflow::nfs::Server server(files);
   QVERIFY(server.start("/secret-path"));
@@ -570,9 +648,23 @@ void OSXRemoteFileVolumeTests::otherClients_areTurnedAway()
   QVERIFY(early.connected());
   QCOMPARE(early.call(kMountProgram, 1, RpcClient::opaque("/wrong")), 13);
   QCOMPARE(early.call(kMountProgram, 1, RpcClient::opaque("/secret-path")), 0);
-  server.setMountAllowed(false);
+  ReplyReader mounted(early.result());
+  const QByteArray root = mounted.opaque();
+  QCOMPARE(root.size(), qsizetype{16});
+  QCOMPARE(early.call(kNfsProgram, 1, RpcClient::opaque(root)), 0);
   QCOMPARE(early.call(kMountProgram, 1, RpcClient::opaque("/secret-path")), 13);
   server.stop();
+
+  // the handles of one server mean nothing to the next, the one a volume mounted again gets
+  deskflow::nfs::Server next(files);
+  QVERIFY(next.start("/next-path"));
+  RpcClient later(next.port());
+  QVERIFY(later.connected());
+  QCOMPARE(later.call(kNfsProgram, 1, RpcClient::opaque(root)), 70);
+  QCOMPARE(later.call(kMountProgram, 1, RpcClient::opaque("/next-path")), 0);
+  ReplyReader mountedAgain(later.result());
+  QVERIFY(mountedAgain.opaque() != root);
+  next.stop();
 
   // and nothing of it is reachable from the network
   const std::string address = otherAddress();
@@ -580,6 +672,118 @@ void OSXRemoteFileVolumeTests::otherClients_areTurnedAway()
     RpcClient outside(port, address.c_str());
     QVERIFY(!outside.connected());
   }
+}
+
+void OSXRemoteFileVolumeTests::listingChangedBetweenPages_positionsAreRefused()
+{
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QDir pages(QDir(directory.path()).filePath("pages"));
+  QVERIFY(QDir().mkpath(pages.path()));
+  for (int i = 0; i < 40; ++i) {
+    QVERIFY(writeFile(pages.filePath(QStringLiteral("file-%1.txt").arg(i, 2, 10, QLatin1Char('0'))), "x"));
+  }
+
+  Link link;
+  OSXRemoteFileSystem::Limits limits;
+  limits.freshMs = 200;
+  OSXRemoteFileSystem files(link.remoteOfB, limits);
+  const ClipboardFileList list = link.copyOnA({pages.path().toStdString()});
+  const std::vector<std::string> shown = files.addOffer(list);
+  QCOMPARE(shown.size(), size_t{1});
+  deskflow::nfs::Server server(files);
+  QVERIFY(server.start("/listing"));
+  RpcClient client(server.port());
+  QVERIFY(client.connected());
+
+  // down to the copied directory, the way the system finds it
+  QCOMPARE(client.call(kMountProgram, 1, RpcClient::opaque("/listing")), 0);
+  QByteArray handle = ReplyReader(client.result()).opaque();
+  for (const QString &name : QString::fromStdString(shown[0]).split('/')) {
+    QByteArray lookup = RpcClient::opaque(handle);
+    lookup.append(RpcClient::opaque(name.toUtf8()));
+    QCOMPARE(client.call(kNfsProgram, 3, lookup), 0);
+    handle = ReplyReader(client.result()).opaque();
+  }
+  const auto readPage = [&](uint64_t cookie, uint64_t verifier, uint32_t count) {
+    QByteArray arguments = RpcClient::opaque(handle);
+    RpcClient::appendU64(arguments, cookie);
+    RpcClient::appendU64(arguments, verifier);
+    RpcClient::appendU32(arguments, count);
+    return client.call(kNfsProgram, 16, arguments);
+  };
+
+  // the first page, it ends before the directory does
+  QCOMPARE(readPage(0, 0, 600), 0);
+  ReplyReader page(client.result());
+  page.skipAttributes();
+  const uint64_t verifier = page.u64();
+  uint64_t cookie = 0;
+  int entries = 0;
+  while (page.u32() != 0 && page.ok()) {
+    page.u64();
+    page.opaque();
+    cookie = page.u64();
+    ++entries;
+  }
+  QVERIFY(page.ok());
+  QCOMPARE(page.u32(), 0U);
+  QVERIFY(entries > 2 && entries < 42);
+
+  // a file goes on the other computer, a pause later the directory is listed again
+  QVERIFY(QFile::remove(pages.filePath("file-00.txt")));
+  std::this_thread::sleep_for(std::chrono::milliseconds(limits.freshMs + 200));
+  // the positions the client has are of the directory as it was: it is told to start over
+  QCOMPARE(readPage(cookie, verifier, 600), 10003);
+
+  QCOMPARE(readPage(0, 0, 64 * 1024), 0);
+  ReplyReader whole(client.result());
+  whole.skipAttributes();
+  QVERIFY(whole.u64() != verifier);
+  QStringList names;
+  while (whole.u32() != 0 && whole.ok()) {
+    whole.u64();
+    names.append(QString::fromUtf8(whole.opaque()));
+    whole.u64();
+  }
+  QVERIFY(whole.ok());
+  QCOMPARE(names.size(), 41);
+  QVERIFY(!names.contains("file-00.txt"));
+  server.stop();
+}
+
+void OSXRemoteFileVolumeTests::tooManyConnections_areClosed()
+{
+  Link link;
+  OSXRemoteFileSystem files(link.remoteOfB);
+  deskflow::nfs::Server server(files);
+  QVERIFY(server.start("/connections"));
+
+  // the system's client makes one or two, the server takes a few
+  std::vector<std::unique_ptr<RpcClient>> clients;
+  for (int i = 0; i < 8; ++i) {
+    clients.push_back(std::make_unique<RpcClient>(server.port()));
+    QVERIFY(clients.back()->connected());
+    QCOMPARE(clients.back()->call(kNfsProgram, 0, {}), 0);
+  }
+  // more are closed as they come
+  RpcClient extra(server.port());
+  QCOMPARE(extra.call(kNfsProgram, 0, {}), -1);
+  QCOMPARE(clients.front()->call(kNfsProgram, 0, {}), 0);
+
+  // once one goes there is room again
+  clients.pop_back();
+  QElapsedTimer timer;
+  timer.start();
+  int64_t answered = -1;
+  while (answered != 0 && timer.elapsed() < 5000) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    RpcClient again(server.port());
+    answered = again.call(kNfsProgram, 0, {});
+  }
+  QCOMPARE(answered, 0);
+  clients.clear();
+  server.stop();
 }
 
 void OSXRemoteFileVolumeTests::unmount_leavesNothingBehind()

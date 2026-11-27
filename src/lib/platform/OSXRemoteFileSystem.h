@@ -46,6 +46,10 @@ public:
   struct Limits
   {
     //! Lists of copied files that are kept, the oldest is dropped for a new one
+    /*!
+    One that is being pasted from is kept for as long as it is, up to twice
+    as many lists.
+    */
     size_t offers = 4;
     //! Downloads that may run at once
     size_t streams = 12;
@@ -122,7 +126,7 @@ public:
   ) override;
   nfs::Status readDirectory(
       const nfs::FileHandle &directory, uint64_t first, size_t limit, std::vector<nfs::DirectoryEntry> &entries,
-      bool &complete
+      bool &complete, uint64_t &version
   ) override;
   nfs::Status
   read(const nfs::FileHandle &file, uint64_t offset, uint32_t count, std::string &data, bool &endOfFile) override;

@@ -30,6 +30,7 @@ private Q_SLOTS:
   void get_filesCopiedLikeFinderDoes_areFound();
   void get_filesOfOtherComputers_areLeftOut();
   void holdsOwnWrite_untilSomethingElseIsCopied();
+  void gone_takesItsFilesOff();
   void generalPasteboard_ownWriteIsNotACopy();
   void manual_privacyProbe();
   void manual_finderPasteAndCopy();

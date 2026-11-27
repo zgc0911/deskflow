@@ -16,6 +16,7 @@
 
 #include <QElapsedTimer>
 #include <QProcess>
+#include <QUuid>
 
 #include <algorithm>
 #include <thread>
@@ -53,7 +54,10 @@ std::string canonical(const QString &path)
 //! The clipboard of a computer that pastes, linked to a computer that copies
 struct PasteSide
 {
-  explicit PasteSide(const std::string &mountCommand = "/sbin/mount_nfs", bool generalPasteboard = false)
+  explicit PasteSide(
+      const std::string &mountCommand = "/sbin/mount_nfs", bool generalPasteboard = false,
+      std::unique_ptr<OSXPasteboardFiles> given = nullptr
+  )
       : base(std::make_unique<QTemporaryDir>())
   {
     OSXRemoteFileVolume::Options options;
@@ -62,7 +66,7 @@ struct PasteSide
     if (!generalPasteboard) {
       options.limits.waitMs = 2000;
     }
-    auto ownPasteboard = std::make_unique<OSXPasteboardFiles>(!generalPasteboard);
+    auto ownPasteboard = given ? std::move(given) : std::make_unique<OSXPasteboardFiles>(!generalPasteboard);
     pasteboard = ownPasteboard.get();
     auto ownVolume = std::make_unique<OSXRemoteFileVolume>(link.remoteOfB, options);
     volume = ownVolume.get();
@@ -309,6 +313,35 @@ void OSXClipboardFilesTests::put_doesNotWaitForTheVolume_packagesIncluded()
   clipboard.link.release();
   qInfo("put took %lld ms, %llu listings were asked for", took, static_cast<unsigned long long>(listed));
   QVERIFY2(took < 200, qPrintable(QString::number(took)));
+}
+
+void OSXClipboardFilesTests::gone_takesItsFilesOff()
+{
+  // a pasteboard that stays when the clipboard files go, as the general one does when Deskflow quits
+  const std::string name = "org.deskflow.tests." + QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
+  OSXPasteboardFiles stays(name, true);
+  std::vector<std::string> paths;
+  {
+    PasteSide paste("/sbin/mount_nfs", false, std::make_unique<OSXPasteboardFiles>(name, false));
+    QVERIFY(paste.mounted);
+    QVERIFY(paste.files->put(paste.copy({sourcePath("a.txt")})));
+    QVERIFY(stays.read(paths));
+    QCOMPARE(paths.size(), size_t{1});
+    paste.files.reset();
+  }
+  // its paths lead nowhere once the volume is gone
+  QVERIFY(!stays.read(paths));
+
+  // what the user copied after it stays
+  {
+    PasteSide paste("/sbin/mount_nfs", false, std::make_unique<OSXPasteboardFiles>(name, false));
+    QVERIFY(paste.mounted);
+    QVERIFY(paste.files->put(paste.copy({sourcePath("a.txt")})));
+    stays.writeText("copied by the user");
+    const long copied = stays.changeCount();
+    paste.files.reset();
+    QCOMPARE(stays.changeCount(), copied);
+  }
 }
 
 void OSXClipboardFilesTests::get_filesCopiedLikeFinderDoes_areFound()

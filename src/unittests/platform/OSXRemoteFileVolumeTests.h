@@ -26,6 +26,8 @@ private Q_SLOTS:
   void slowSource_copyCompletes();
   void sourceGone_copyFails_volumeStays();
   void otherClients_areTurnedAway();
+  void listingChangedBetweenPages_positionsAreRefused();
+  void tooManyConnections_areClosed();
   void unmount_leavesNothingBehind();
   void leftoversOfDeadProcesses_areRemoved();
   void mountCommandSlowOrFailing_neverHoldsUpAddingFiles();

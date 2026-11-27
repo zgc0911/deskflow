@@ -34,6 +34,8 @@ enum class Status : uint32_t
   ReadOnly = 30,
   Stale = 70,
   BadHandle = 10001,
+  //! A position in a directory that is no good any more, the directory changed since
+  BadCookie = 10003,
   //! Not ready yet, the system waits a moment and asks again
   TryLater = 10008
 };
@@ -77,10 +79,12 @@ public:
   /*!
   Returns at most \p limit entries, starting with the one at position
   \p first. \p complete tells that the last entry of the directory is among
-  them. The order of a directory never changes.
+  them. \p version changes whenever what the directory holds changes: a
+  position is one in the directory of that version.
   */
   virtual Status readDirectory(
-      const FileHandle &directory, uint64_t first, size_t limit, std::vector<DirectoryEntry> &entries, bool &complete
+      const FileHandle &directory, uint64_t first, size_t limit, std::vector<DirectoryEntry> &entries, bool &complete,
+      uint64_t &version
   ) = 0;
 
   //! Read from a file. \p endOfFile tells that nothing follows the returned data.
@@ -94,9 +98,10 @@ extension: the system's own NFS client connects to this server over TCP on
 127.0.0.1. Implements the MOUNT and NFS programs on one port, as far as a
 read-only mount needs them.
 
-Only the mount this process sets up is meant to succeed. A client has to
-know the export path to get the handle of the root directory, mounting can
-be turned off once that happened, and file handles can not be guessed.
+Only the mount this process sets up is meant to succeed. The handle of the
+root directory is given once, to the first client that knows the export
+path. File handles can not be guessed, and those of one server mean
+nothing to another: a volume that is mounted again gets new ones.
 */
 class Server
 {
@@ -122,7 +127,7 @@ public:
   //! The TCP port on 127.0.0.1, zero if not started
   uint16_t port() const;
 
-  //! Whether mount requests are still answered with the root handle
+  //! Whether a mount request is still answered with the root handle, only one ever is
   void setMountAllowed(bool allowed);
 
   //! Number of calls handled so far, for tests
@@ -139,8 +144,13 @@ private:
   std::string handleCall(const std::string &record);
   bool mountCall(uint32_t procedure, class XdrReader &arguments, class XdrWriter &result);
   bool nfsCall(uint32_t procedure, class XdrReader &arguments, class XdrWriter &result);
+  //! A handle of the file system as this server tells it, and back
+  FileHandle outward(const FileHandle &handle) const;
+  FileHandle inward(const FileHandle &handle) const;
 
   IFileSystem &m_fileSystem;
+  //! Makes the handles this server tells its own
+  FileHandle m_mask{};
   std::string m_exportPath;
   std::atomic<bool> m_mountAllowed{true};
   std::atomic<bool> m_stopping{false};
