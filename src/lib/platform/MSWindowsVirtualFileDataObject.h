@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <map>
@@ -94,6 +95,9 @@ public:
   //! True while an application is copying the files on a background thread
   bool inAsyncOperation() const;
 
+  //! Number of content streams that are still in use, for tests
+  int liveStreams() const;
+
   //! Number of asynchronous copy operations that have finished
   uint32_t finishedAsyncOperations() const;
 
@@ -128,7 +132,7 @@ private:
   // destroyed through Release()
   virtual ~MSWindowsVirtualFileDataObject() = default;
 
-  //! List the files, again if \p fresh and the last listing is from an earlier paste
+  //! List the files, again if \p fresh and the last listing is from an earlier paste that is over
   bool ensureListed(bool fresh);
   HRESULT getFileDescriptor(STGMEDIUM *medium);
   HRESULT getFileContents(LONG index, STGMEDIUM *medium);
@@ -140,11 +144,17 @@ private:
 
   mutable std::mutex m_mutex;
   bool m_listed = false;
-  bool m_listFailed = false;
+  //! A listing succeeded at least once, m_entries holds the last one that did
+  bool m_hasList = false;
   std::chrono::steady_clock::time_point m_listedAt{};
+  //! When file contents were asked for last, an application that does so may still be copying
+  std::chrono::steady_clock::time_point m_contentsAt{};
   std::vector<MSWindowsVirtualFileEntry> m_entries;
   std::map<UINT, std::vector<uint8_t>> m_globalFormats;
   bool m_asyncMode = true;
-  bool m_inOperation = false;
+  //! Copies that run at once, each between StartOperation and EndOperation
+  int m_operations = 0;
   uint32_t m_finishedOperations = 0;
+  //! Streams handed out and not released yet, they may outlive this object
+  std::shared_ptr<std::atomic<int>> m_liveStreams = std::make_shared<std::atomic<int>>(0);
 };

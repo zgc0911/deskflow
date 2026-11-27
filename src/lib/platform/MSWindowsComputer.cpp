@@ -69,6 +69,23 @@
 #define VK_XBUTTON2 0x06
 #endif
 
+namespace {
+
+//! Posted to the window once the clipboard thread did the changes asked for
+constexpr UINT kClipboardWrittenMessage = WM_APP + 0x0100;
+
+//! Whether what the clipboard holds is Deskflow's, unknown while \p files writes it
+MSWindowsClipboardFiles::Ownership clipboardOwner(const MSWindowsClipboardFiles *files)
+{
+  using enum MSWindowsClipboardFiles::Ownership;
+  if (files != nullptr) {
+    return files->ownership();
+  }
+  return MSWindowsClipboard::isOwnedByDeskflow() ? Deskflow : Other;
+}
+
+} // namespace
+
 // WM_POWERBROADCAST stuff
 #if !defined(PBT_APMRESUMEAUTOMATIC)
 #define PBT_APMRESUMEAUTOMATIC 0x0012
@@ -354,7 +371,11 @@ void MSWindowsComputer::setFileTransfer(deskflow::FileTransfer *fileTransfer)
   // what reads from the transfer goes first
   m_clipboardFiles.reset();
   if (fileTransfer != nullptr) {
-    m_clipboardFiles = std::make_unique<MSWindowsClipboardFiles>(fileTransfer->remoteFiles());
+    // a change of the clipboard that came while it was written is looked at once the writing is done
+    HWND window = m_window;
+    m_clipboardFiles = std::make_unique<MSWindowsClipboardFiles>(fileTransfer->remoteFiles(), [window] {
+      PostMessageW(window, kClipboardWrittenMessage, 0, 0);
+    });
   }
 }
 
@@ -371,7 +392,9 @@ void MSWindowsComputer::checkClipboards()
   // next reboot we do this double check.  clipboard ownership
   // won't be reflected on other computers until we leave but at
   // least the clipboard itself will work.
-  if (m_ownClipboard && !MSWindowsClipboard::isOwnedByDeskflow()) {
+  //
+  // while this process writes the clipboard it is looked at once that is done.
+  if (m_ownClipboard && clipboardOwner(m_clipboardFiles.get()) == MSWindowsClipboardFiles::Ownership::Other) {
     LOG_DEBUG("clipboard changed: lost ownership and no notification received");
     m_ownClipboard = false;
     sendClipboardEvent(EventTypes::ClipboardGrabbed, kClipboardClipboard);
@@ -970,6 +993,11 @@ bool MSWindowsComputer::onEvent(HWND, UINT msg, WPARAM wParam, LPARAM lParam, LR
     return 0; // message processed
   }
 
+  case kClipboardWrittenMessage:
+    onClipboardChange();
+    *result = 0;
+    return true;
+
   case WM_DISPLAYCHANGE:
     return onDisplayChange();
 
@@ -1369,9 +1397,18 @@ bool MSWindowsComputer::onDisplayChange()
 
 void MSWindowsComputer::onClipboardChange()
 {
+  // a change of this process passes through states in between, an empty clipboard for one.
+  // it is looked at again once the writing is done.
+  using enum MSWindowsClipboardFiles::Ownership;
+  const MSWindowsClipboardFiles::Ownership owner = clipboardOwner(m_clipboardFiles.get());
+  if (owner == Unknown) {
+    LOG_DEBUG("clipboard changed while it is written");
+    return;
+  }
+
   // now notify client that somebody changed the clipboard (unless
   // we're the owner).
-  if (!MSWindowsClipboard::isOwnedByDeskflow()) {
+  if (owner == Other) {
     if (m_ownClipboard) {
       LOG_DEBUG("clipboard changed: lost ownership");
       m_ownClipboard = false;

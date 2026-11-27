@@ -44,7 +44,21 @@ does not take it for something the user copied.
 class MSWindowsClipboardFiles
 {
 public:
-  explicit MSWindowsClipboardFiles(std::shared_ptr<deskflow::RemoteFiles> files);
+  //! What the clipboard holds, as far as this process can tell
+  enum class Ownership
+  {
+    Deskflow, //!< what this process put there
+    Other,    //!< what somebody else put there
+    Unknown   //!< a change of this process is under way, ask again once it is done
+  };
+
+  /*!
+  \p written is called on the thread that writes, each time the changes asked
+  for so far are done. It may be empty.
+  */
+  explicit MSWindowsClipboardFiles(
+      std::shared_ptr<deskflow::RemoteFiles> files, std::function<void()> written = nullptr
+  );
   ~MSWindowsClipboardFiles();
   MSWindowsClipboardFiles(MSWindowsClipboardFiles const &) = delete;
   MSWindowsClipboardFiles &operator=(MSWindowsClipboardFiles const &) = delete;
@@ -55,6 +69,14 @@ public:
   list of files offers the files, next to the other formats it holds.
   */
   void set(const IClipboard *clipboard);
+
+  //! Whether the clipboard holds what this process put there
+  /*!
+  A change passes through states in between, an empty clipboard for one, so
+  the answer is Ownership::Unknown until the changes asked for are done. Call
+  it on the thread that asks for changes.
+  */
+  Ownership ownership() const;
 
   //! Wait until every change asked for so far is done, for tests
   bool waitUntilDone(int timeoutMs) const;
@@ -73,17 +95,24 @@ public:
   static UINT ownershipFormat();
 
 private:
-  using Job = std::function<void()>;
+  //! A change of the clipboard, false when the clipboard could not be changed
+  using Job = std::function<bool()>;
 
   void run();
-  void post(Job job);
-  void putFiles(const IClipboard &clipboard);
-  void putFormats(const IClipboard &clipboard);
-  void empty();
+  //! Returns the number of the job, they are done in that order
+  uint64_t post(Job job);
+  //! Do \p job, again while the clipboard is kept open by somebody else
+  bool write(const Job &job);
+  bool putFiles(const IClipboard &clipboard);
+  bool putFormats(const IClipboard &clipboard) const;
+  bool empty() const;
+  //! Take the files off the clipboard, if they are still there
+  bool takeOff();
   //! Forget the data object that was put on the clipboard last
   void forgetCurrent();
 
   std::shared_ptr<deskflow::RemoteFiles> m_files;
+  std::function<void()> m_written;
 
   mutable std::mutex m_mutex;
   mutable std::condition_variable m_changed;
@@ -92,13 +121,17 @@ private:
   bool m_ready = false;
   uint64_t m_posted = 0;
   uint64_t m_done = 0;
+  //! The last job that changed the clipboard, and the clipboard sequence number right after
+  uint64_t m_writtenJob = 0;
+  DWORD m_writtenSequence = 0;
   //! Wakes the thread when a job is posted
   HANDLE m_wake = nullptr;
 
-  //! Skips writing the same clipboard twice in a row, once for each clipboard ID
+  // used by the thread that asks for changes only: the same clipboard arrives once for each
+  // clipboard ID, it is written once unless it was replaced since
   std::string m_lastData;
-  //! The clipboard sequence number after the last write, zero while it is not known
-  std::atomic<DWORD> m_sequenceAfterWrite{0};
+  uint64_t m_lastDataJob = 0;
+
   std::atomic<uint64_t> m_filesPut{0};
 
   // used by the thread only

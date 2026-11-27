@@ -26,6 +26,7 @@ private Q_SLOTS:
   void put_volumeNotMounted_changesNothing();
   void put_namesThatCanNotBeShown_areLeftOut();
   void put_doesNotWaitForTheVolume();
+  void put_doesNotWaitForTheVolume_packagesIncluded();
   void get_filesCopiedLikeFinderDoes_areFound();
   void get_filesOfOtherComputers_areLeftOut();
   void holdsOwnWrite_untilSomethingElseIsCopied();

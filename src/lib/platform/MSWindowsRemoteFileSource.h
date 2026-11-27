@@ -10,10 +10,12 @@
 #include "platform/MSWindowsVirtualFileDataObject.h"
 
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace deskflow {
@@ -75,6 +77,7 @@ private:
   Limits m_limits;
 
   std::mutex m_mutex;
-  //! What each source identifier stands for, they are never used twice
+  //! What each source identifier stands for, one for each file however often it is listed
   std::vector<Remote> m_remote;
+  std::map<std::pair<uint32_t, std::string>, size_t> m_ids;
 };

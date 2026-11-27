@@ -280,6 +280,37 @@ void OSXClipboardFilesTests::put_doesNotWaitForTheVolume()
   clipboard.link.release();
 }
 
+void OSXClipboardFilesTests::put_doesNotWaitForTheVolume_packagesIncluded()
+{
+  // folders the system may look into to tell whether they are packages
+  QTemporaryDir source;
+  QVERIFY(source.isValid());
+  const QDir root(source.path());
+  QVERIFY(QDir().mkpath(root.filePath("Tool.app/Contents/MacOS")));
+  QVERIFY(writeFile(root.filePath("Tool.app/Contents/Info.plist"), "<plist version=\"1.0\"><dict/></plist>"));
+  QVERIFY(writeFile(root.filePath("Tool.app/Contents/MacOS/Tool"), "binary"));
+  QVERIFY(QDir().mkpath(root.filePath("Note.rtfd")));
+  QVERIFY(writeFile(root.filePath("Note.rtfd/TXT.rtf"), "{\\rtf1 text}"));
+  QVERIFY(QDir().mkpath(root.filePath("Plugin.bundle/Contents")));
+  QVERIFY(writeFile(root.filePath("Plugin.bundle/Contents/Info.plist"), "<plist version=\"1.0\"><dict/></plist>"));
+
+  PasteSide clipboard;
+  QVERIFY(clipboard.mounted);
+  const ClipboardFileList list =
+      clipboard.copy({root.filePath("Tool.app"), root.filePath("Note.rtfd"), root.filePath("Plugin.bundle")});
+  QCOMPARE(list.entries.size(), size_t{3});
+
+  clipboard.link.hold();
+  QElapsedTimer timer;
+  timer.start();
+  QVERIFY(clipboard.files->put(list));
+  const qint64 took = timer.elapsed();
+  const uint64_t listed = clipboard.volume->fileSystem().listingCount();
+  clipboard.link.release();
+  qInfo("put took %lld ms, %llu listings were asked for", took, static_cast<unsigned long long>(listed));
+  QVERIFY2(took < 200, qPrintable(QString::number(took)));
+}
+
 void OSXClipboardFilesTests::get_filesCopiedLikeFinderDoes_areFound()
 {
   PasteSide clipboard;

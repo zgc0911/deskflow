@@ -26,6 +26,10 @@ const uint64_t kFileTimeEpochOffset = 11644473600ULL;
 //! Asking for the descriptors again after this long is taken for another paste
 const auto kListingLifetime = std::chrono::seconds(3);
 
+// what other applications may store with SetData, the shell keeps a few small values
+const size_t kMaxSetDataSize = 64 * 1024;
+const size_t kMaxGlobalFormats = 64;
+
 FILETIME toFileTime(int64_t unixSeconds)
 {
   const uint64_t ticks = (static_cast<uint64_t>(unixSeconds) + kFileTimeEpochOffset) * 10000000ULL;
@@ -69,10 +73,15 @@ of the thread that owns the clipboard.
 class VirtualFileStream : public IStream
 {
 public:
-  VirtualFileStream(std::shared_ptr<IMSWindowsVirtualFileSource> source, const MSWindowsVirtualFileEntry &entry)
+  VirtualFileStream(
+      std::shared_ptr<IMSWindowsVirtualFileSource> source, const MSWindowsVirtualFileEntry &entry,
+      std::shared_ptr<std::atomic<int>> live
+  )
       : m_source(std::move(source)),
-        m_entry(entry)
+        m_entry(entry),
+        m_live(std::move(live))
   {
+    ++*m_live;
     CoCreateFreeThreadedMarshaler(static_cast<IStream *>(this), &m_marshaler);
   }
 
@@ -309,12 +318,14 @@ private:
     if (m_marshaler != nullptr) {
       m_marshaler->Release();
     }
+    --*m_live;
   }
 
   LONG m_refCount = 1;
   IUnknown *m_marshaler = nullptr;
   std::shared_ptr<IMSWindowsVirtualFileSource> m_source;
   MSWindowsVirtualFileEntry m_entry;
+  std::shared_ptr<std::atomic<int>> m_live;
 
   std::mutex m_mutex;
   std::unique_ptr<IMSWindowsVirtualFileReader> m_reader;
@@ -346,7 +357,12 @@ void MSWindowsVirtualFileDataObject::addGlobalFormat(UINT format, const void *da
 bool MSWindowsVirtualFileDataObject::inAsyncOperation() const
 {
   std::scoped_lock lock{m_mutex};
-  return m_inOperation;
+  return m_operations > 0;
+}
+
+int MSWindowsVirtualFileDataObject::liveStreams() const
+{
+  return *m_liveStreams;
 }
 
 uint32_t MSWindowsVirtualFileDataObject::finishedAsyncOperations() const
@@ -408,11 +424,16 @@ bool MSWindowsVirtualFileDataObject::ensureListed(bool fresh)
 {
   {
     std::scoped_lock lock{m_mutex};
-    // a paste asks for the descriptors first. one that comes a while after the last is another
-    // paste, and the files may have changed since. while files are copied the list stays as it is.
-    const bool current = !fresh || m_inOperation || std::chrono::steady_clock::now() - m_listedAt < kListingLifetime;
-    if (m_listed && current) {
-      return !m_listFailed;
+    if (m_listed) {
+      // a paste asks for the descriptors first, and for the contents of a file by its place in
+      // them. the list must stay as it is while a paste may still ask for contents: a copy is
+      // running, a stream is in use, or contents were asked for a moment ago. a paste that asks
+      // for the descriptors after that gets them again, the files may have changed since.
+      const auto now = std::chrono::steady_clock::now();
+      const bool inUse = m_operations > 0 || *m_liveStreams > 0 || now - m_contentsAt < kListingLifetime;
+      if (!fresh || inUse || now - m_listedAt < kListingLifetime) {
+        return m_hasList;
+      }
     }
   }
 
@@ -423,8 +444,8 @@ bool MSWindowsVirtualFileDataObject::ensureListed(bool fresh)
   std::scoped_lock lock{m_mutex};
   m_listed = true;
   m_listedAt = std::chrono::steady_clock::now();
-  m_listFailed = !ok;
   if (!ok) {
+    // the list that was handed out before stays, for a paste that still uses it
     LOG_WARN("failed to list the files offered on the clipboard");
     return false;
   }
@@ -440,6 +461,7 @@ bool MSWindowsVirtualFileDataObject::ensureListed(bool fresh)
     }
     m_entries.push_back(entry);
   }
+  m_hasList = true;
   return true;
 }
 
@@ -503,6 +525,7 @@ HRESULT MSWindowsVirtualFileDataObject::getFileContents(LONG index, STGMEDIUM *m
   }
 
   std::scoped_lock lock{m_mutex};
+  m_contentsAt = std::chrono::steady_clock::now();
   if (index < 0 || static_cast<size_t>(index) >= m_entries.size()) {
     return DV_E_LINDEX;
   }
@@ -513,7 +536,7 @@ HRESULT MSWindowsVirtualFileDataObject::getFileContents(LONG index, STGMEDIUM *m
   }
 
   medium->tymed = TYMED_ISTREAM;
-  medium->pstm = new VirtualFileStream(m_source, entry);
+  medium->pstm = new VirtualFileStream(m_source, entry, m_liveStreams);
   medium->pUnkForRelease = nullptr;
   return S_OK;
 }
@@ -622,7 +645,15 @@ IFACEMETHODIMP MSWindowsVirtualFileDataObject::SetData(FORMATETC *format, STGMED
     return DV_E_TYMED;
   }
 
+  // any application of the user may call this, and the core may run as SYSTEM: keep it small
   const SIZE_T size = GlobalSize(medium->hGlobal);
+  {
+    std::scoped_lock lock{m_mutex};
+    if (size > kMaxSetDataSize ||
+        (m_globalFormats.size() >= kMaxGlobalFormats && !m_globalFormats.contains(format->cfFormat))) {
+      return E_OUTOFMEMORY;
+    }
+  }
   const void *data = GlobalLock(medium->hGlobal);
   if (data == nullptr) {
     return E_OUTOFMEMORY;
@@ -693,7 +724,7 @@ IFACEMETHODIMP MSWindowsVirtualFileDataObject::GetAsyncMode(BOOL *isOpAsync)
 IFACEMETHODIMP MSWindowsVirtualFileDataObject::StartOperation(IBindCtx *)
 {
   std::scoped_lock lock{m_mutex};
-  m_inOperation = true;
+  ++m_operations;
   return S_OK;
 }
 
@@ -703,7 +734,7 @@ IFACEMETHODIMP MSWindowsVirtualFileDataObject::InOperation(BOOL *inAsyncOp)
     return E_POINTER;
   }
   std::scoped_lock lock{m_mutex};
-  *inAsyncOp = m_inOperation ? VARIANT_TRUE : VARIANT_FALSE;
+  *inAsyncOp = (m_operations > 0) ? VARIANT_TRUE : VARIANT_FALSE;
   return S_OK;
 }
 
@@ -714,7 +745,9 @@ IFACEMETHODIMP MSWindowsVirtualFileDataObject::EndOperation(HRESULT result, IBin
       static_cast<unsigned>(effects)
   );
   std::scoped_lock lock{m_mutex};
-  m_inOperation = false;
+  if (m_operations > 0) {
+    --m_operations;
+  }
   ++m_finishedOperations;
   return S_OK;
 }

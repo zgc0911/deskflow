@@ -21,6 +21,7 @@ private Q_SLOTS:
   void cleanupTestCase();
   void windowsName_changesWhatWindowsDoesNotAllow();
   void remoteSource_listsTheWholeTree();
+  void remoteSource_tooManyEntries_stopsListing();
   void remoteSource_namesThatDifferInCase_getANumber();
   void remoteSource_readsFilesAsTheyAreNow();
   void remoteSource_goneFiles_areLeftOut();
@@ -29,8 +30,12 @@ private Q_SLOTS:
   void clipboard_holdsTheFilesMarkedAsDeskflows();
   void clipboard_laterClipboardWins();
   void clipboard_sameClipboardTwice_putsFilesOnce();
+  void clipboard_heldOpenByAnother_isWrittenOnceFree();
+  void clipboard_readWhileWritten_isRendered();
+  void clipboard_writeGivenUp_isWrittenNextTime();
   void clipboard_emptied_isDeskflows();
   void clipboard_gone_takesTheFilesOff();
+  void clipboard_goneWhileHeldOpen_takesTheFilesOff();
   void readFiles_reportsCopiedPaths();
 
 private:

@@ -56,17 +56,22 @@ std::wstring folded(const std::wstring &name)
 
 bool isReservedName(const std::wstring &name)
 {
-  // the part before the first dot decides, whatever the case: "con.txt" is the console
-  const std::wstring base = folded(name.substr(0, name.find(L'.')));
-  static const wchar_t *const reserved[] = {L"con", L"prn", L"aux", L"nul"};
+  // the part before the first dot decides, whatever the case and spaces before the dot:
+  // "con.txt" and "con .txt" are the console
+  std::wstring base = folded(name.substr(0, name.find(L'.')));
+  while (!base.empty() && base.back() == L' ') {
+    base.pop_back();
+  }
+  static const wchar_t *const reserved[] = {L"con", L"prn", L"aux", L"nul", L"conin$", L"conout$"};
   for (const wchar_t *word : reserved) {
     if (base == word) {
       return true;
     }
   }
-  if (base.size() == 4 && (base.compare(0, 3, L"com") == 0 || base.compare(0, 3, L"lpt") == 0) && base[3] >= L'1' &&
-      base[3] <= L'9') {
-    return true;
+  // the ports take a digit, superscript ones too
+  if (base.size() == 4 && (base.compare(0, 3, L"com") == 0 || base.compare(0, 3, L"lpt") == 0)) {
+    const wchar_t number = base[3];
+    return (number >= L'0' && number <= L'9') || number == L'\u00b9' || number == L'\u00b2' || number == L'\u00b3';
   }
   return false;
 }
@@ -162,8 +167,15 @@ std::wstring MSWindowsRemoteFileSource::uniqueName(const std::wstring &name, boo
 size_t MSWindowsRemoteFileSource::remember(uint32_t item, const std::string &relativePath)
 {
   std::scoped_lock lock{m_mutex};
+  // listed again, the same file keeps its identifier
+  const auto known = m_ids.find({item, relativePath});
+  if (known != m_ids.end()) {
+    return known->second;
+  }
   m_remote.push_back({item, relativePath});
-  return m_remote.size() - 1;
+  const size_t id = m_remote.size() - 1;
+  m_ids.emplace(std::make_pair(item, relativePath), id);
+  return id;
 }
 
 bool MSWindowsRemoteFileSource::list(std::vector<MSWindowsVirtualFileEntry> &entries)
@@ -229,6 +241,15 @@ bool MSWindowsRemoteFileSource::list(std::vector<MSWindowsVirtualFileEntry> &ent
 
   // directories before what they hold, as the shell wants it
   while (!directories.empty()) {
+    if (entries.size() >= m_limits.maxEntries) {
+      // nothing more fits: what these hold is not even asked for
+      LOG_WARN(
+          "too many copied files to paste, what %d of the copied directories hold is left out",
+          static_cast<int>(directories.size())
+      );
+      directories.clear();
+      break;
+    }
     const Directory directory = std::move(directories.front());
     directories.pop_front();
 

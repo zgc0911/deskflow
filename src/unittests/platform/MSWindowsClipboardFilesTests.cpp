@@ -17,9 +17,14 @@
 #include <QElapsedTimer>
 
 #include <algorithm>
+#include <atomic>
+#include <condition_variable>
 #include <cstring>
+#include <functional>
 #include <map>
+#include <mutex>
 #include <set>
+#include <thread>
 
 #include <ShObjIdl.h>
 #include <ShellAPI.h>
@@ -84,11 +89,9 @@ bool openClipboard()
   return waitFor([] { return OpenClipboard(g_window) != FALSE; }, 2000);
 }
 
-QString clipboardText()
+//! The text of the clipboard, which this thread has open
+QString textOfOpenClipboard()
 {
-  if (!openClipboard()) {
-    return QStringLiteral("<can't open the clipboard>");
-  }
   QString text;
   HANDLE data = GetClipboardData(CF_UNICODETEXT);
   if (data != nullptr) {
@@ -98,8 +101,97 @@ QString clipboardText()
       GlobalUnlock(data);
     }
   }
+  return text;
+}
+
+QString clipboardText()
+{
+  if (!openClipboard()) {
+    return QStringLiteral("<can't open the clipboard>");
+  }
+  const QString text = textOfOpenClipboard();
   CloseClipboard();
   return text;
+}
+
+//! Keeps the clipboard open on a thread of its own, the way another application may
+class ClipboardHolder
+{
+public:
+  //! \p whileOpen runs once the clipboard is open, \p beforeClose once it is released
+  explicit ClipboardHolder(std::function<void()> whileOpen = {}, std::function<void()> beforeClose = {})
+  {
+    m_thread = std::thread([this, whileOpen, beforeClose] {
+      bool opened = false;
+      for (int attempt = 0; attempt < 500 && !opened; ++attempt) {
+        opened = OpenClipboard(nullptr) != FALSE;
+        if (!opened) {
+          Sleep(10);
+        }
+      }
+      if (opened && whileOpen) {
+        whileOpen();
+      }
+      m_open = opened;
+      m_ready = true;
+      {
+        std::unique_lock lock{m_mutex};
+        m_changed.wait(lock, [this] { return m_release; });
+      }
+      if (opened) {
+        if (beforeClose) {
+          beforeClose();
+        }
+        CloseClipboard();
+      }
+      m_closed = true;
+    });
+  }
+
+  ~ClipboardHolder()
+  {
+    release();
+    m_thread.join();
+  }
+
+  ClipboardHolder(ClipboardHolder const &) = delete;
+  ClipboardHolder &operator=(ClipboardHolder const &) = delete;
+
+  //! True once the clipboard is open, messages of this thread are handled meanwhile
+  bool open()
+  {
+    return waitFor([this] { return m_ready.load(); }, 10000) && m_open;
+  }
+
+  void release()
+  {
+    {
+      std::scoped_lock lock{m_mutex};
+      m_release = true;
+    }
+    m_changed.notify_all();
+  }
+
+  //! True once the clipboard is closed again, messages of this thread are handled meanwhile
+  bool closed()
+  {
+    return waitFor([this] { return m_closed.load(); }, 10000);
+  }
+
+private:
+  std::mutex m_mutex;
+  std::condition_variable m_changed;
+  bool m_release = false;
+  std::atomic<bool> m_ready = false;
+  std::atomic<bool> m_open = false;
+  std::atomic<bool> m_closed = false;
+  std::thread m_thread;
+};
+
+uint64_t requestsOf(Monitor &monitor)
+{
+  std::scoped_lock lock{monitor.mutex};
+  return monitor.requests;
 }
 
 bool hasFileDescriptors()
@@ -201,8 +293,17 @@ void MSWindowsClipboardFilesTests::windowsName_changesWhatWindowsDoesNotAllow()
   QCOMPARE(Source::windowsName("con.txt"), std::wstring(L"_con.txt"));
   QCOMPARE(Source::windowsName("Com1.log"), std::wstring(L"_Com1.log"));
   QCOMPARE(Source::windowsName("lpt9"), std::wstring(L"_lpt9"));
-  QCOMPARE(Source::windowsName("COM0"), std::wstring(L"COM0"));
+  QCOMPARE(Source::windowsName("COM0"), std::wstring(L"_COM0"));
+  QCOMPARE(Source::windowsName("LPT0.txt"), std::wstring(L"_LPT0.txt"));
+  // superscript digits are port numbers as well
+  QCOMPARE(Source::windowsName("COM\xc2\xb9.txt"), std::wstring(L"_COM\u00b9.txt"));
+  QCOMPARE(Source::windowsName("lpt\xc2\xb3"), std::wstring(L"_lpt\u00b3"));
+  // spaces before the dot don't count
+  QCOMPARE(Source::windowsName("NUL .txt"), std::wstring(L"_NUL .txt"));
+  QCOMPARE(Source::windowsName("conout$"), std::wstring(L"_conout$"));
   QCOMPARE(Source::windowsName("console"), std::wstring(L"console"));
+  QCOMPARE(Source::windowsName("COM10"), std::wstring(L"COM10"));
+  QCOMPARE(Source::windowsName("COM\xc2\xb4"), std::wstring(L"COM\u00b4"));
 }
 
 void MSWindowsClipboardFilesTests::remoteSource_listsTheWholeTree()
@@ -254,13 +355,38 @@ void MSWindowsClipboardFilesTests::remoteSource_listsTheWholeTree()
     }
   }
 
-  // listed again for the next paste, with identifiers of its own
+  // listed again for the next paste: each keeps its identifier, nothing more is kept
   std::vector<MSWindowsVirtualFileEntry> again;
   QVERIFY(source.list(again));
   QCOMPARE(again.size(), entries.size());
   for (const auto &entry : again) {
-    QVERIFY(!ids.contains(entry.sourceId));
+    QCOMPARE(entry.sourceId, byPath[pathOf(entry)].sourceId);
   }
+  QVERIFY(source.open(*ids.rbegin() + 1, 0) == nullptr);
+}
+
+void MSWindowsClipboardFilesTests::remoteSource_tooManyEntries_stopsListing()
+{
+  QTemporaryDir directory;
+  QVERIFY(directory.isValid());
+  const QDir root(directory.path());
+  for (int index = 0; index < 20; ++index) {
+    const QString sub = QStringLiteral("many/sub%1").arg(index);
+    QVERIFY(root.mkpath(sub));
+    QVERIFY(writeFile(root.filePath(sub + "/file.txt"), "in a directory"));
+  }
+  Link link;
+  const ClipboardFileList list = copyOnA(link, {root.filePath("many")});
+  MSWindowsRemoteFileSource::Limits limits;
+  limits.maxEntries = 5;
+  MSWindowsRemoteFileSource source(link.remoteOfB, list, limits);
+
+  const uint64_t before = requestsOf(link.askedByB);
+  std::vector<MSWindowsVirtualFileEntry> entries;
+  QVERIFY(source.list(entries));
+  QCOMPARE(entries.size(), size_t{5});
+  // the copied entries and the copied directory are asked for, the directories in it are not
+  QCOMPARE(requestsOf(link.askedByB) - before, uint64_t{2});
 }
 
 void MSWindowsClipboardFilesTests::remoteSource_namesThatDifferInCase_getANumber()
@@ -487,9 +613,12 @@ void MSWindowsClipboardFilesTests::clipboard_sameClipboardTwice_putsFilesOnce()
   MSWindowsClipboardFiles clipboard(link.remoteOfB);
   const auto files = received("", &list);
 
-  // once for each clipboard ID
+  // once for each clipboard ID, one right after the other
+  clipboard.set(files.get());
   clipboard.set(files.get());
   QVERIFY(finished(clipboard));
+  QCOMPARE(clipboard.filesPut(), uint64_t{1});
+  // and once it is there
   clipboard.set(files.get());
   QVERIFY(finished(clipboard));
   QCOMPARE(clipboard.filesPut(), uint64_t{1});
@@ -502,6 +631,84 @@ void MSWindowsClipboardFilesTests::clipboard_sameClipboardTwice_putsFilesOnce()
   QVERIFY(finished(clipboard));
   QCOMPARE(clipboard.filesPut(), uint64_t{2});
   QVERIFY(hasFileDescriptors());
+}
+
+void MSWindowsClipboardFilesTests::clipboard_heldOpenByAnother_isWrittenOnceFree()
+{
+  using enum MSWindowsClipboardFiles::Ownership;
+  Link link;
+  std::atomic<int> written = 0;
+  MSWindowsClipboardFiles clipboard(link.remoteOfB, [&written] { ++written; });
+  {
+    // emptied by another application, which keeps it open for a while
+    ClipboardHolder holder([] { EmptyClipboard(); });
+    QVERIFY(holder.open());
+    QCOMPARE(clipboard.ownership(), Other);
+
+    const auto text = received("written later", nullptr);
+    clipboard.set(text.get());
+    QTest::qWait(300);
+    // half way nothing can be told, the computer must not take it for a copy of the user
+    QCOMPARE(clipboard.ownership(), Unknown);
+    QCOMPARE(written.load(), 0);
+    holder.release();
+    QVERIFY(holder.closed());
+  }
+  QVERIFY(finished(clipboard));
+  QVERIFY(waitFor([&written] { return written.load() > 0; }, 2000));
+  QCOMPARE(clipboard.ownership(), Deskflow);
+  QCOMPARE(clipboardText(), QStringLiteral("written later"));
+}
+
+void MSWindowsClipboardFilesTests::clipboard_readWhileWritten_isRendered()
+{
+  Link link;
+  const ClipboardFileList list = copyOnA(link, {sourcePath("tree/a.txt")});
+  MSWindowsClipboardFiles clipboard(link.remoteOfB);
+  const auto files = received("with the files", &list);
+  clipboard.set(files.get());
+  QVERIFY(finished(clipboard));
+
+  // a clipboard tool reads the text just as the next clipboard arrives. it keeps the clipboard
+  // open until the thread that put the files there renders the text.
+  QString read;
+  ClipboardHolder reader({}, [&read] { read = textOfOpenClipboard(); });
+  QVERIFY(reader.open());
+  const auto text = received("the next one", nullptr);
+  clipboard.set(text.get());
+  QTest::qWait(200);
+  QElapsedTimer timer;
+  timer.start();
+  reader.release();
+  QVERIFY(reader.closed());
+  const qint64 rendering = timer.elapsed();
+  QVERIFY(finished(clipboard));
+
+  QCOMPARE(read, QStringLiteral("with the files"));
+  QVERIFY2(rendering < 1000, qPrintable(QString::number(rendering)));
+  QCOMPARE(clipboardText(), QStringLiteral("the next one"));
+}
+
+void MSWindowsClipboardFilesTests::clipboard_writeGivenUp_isWrittenNextTime()
+{
+  Link link;
+  MSWindowsClipboardFiles clipboard(link.remoteOfB);
+  const auto text = received("written at last", nullptr);
+  {
+    // kept open for longer than the thread tries
+    ClipboardHolder holder;
+    QVERIFY(holder.open());
+    clipboard.set(text.get());
+    QVERIFY(finished(clipboard));
+    holder.release();
+    QVERIFY(holder.closed());
+  }
+  QVERIFY(clipboardText() != QStringLiteral("written at last"));
+
+  // the same clipboard comes again, for the other clipboard ID or later: it is written now
+  clipboard.set(text.get());
+  QVERIFY(finished(clipboard));
+  QCOMPARE(clipboardText(), QStringLiteral("written at last"));
 }
 
 void MSWindowsClipboardFilesTests::clipboard_emptied_isDeskflows()
@@ -528,6 +735,29 @@ void MSWindowsClipboardFilesTests::clipboard_gone_takesTheFilesOff()
 
   // the files can't be fetched once it is gone, they must not stay on the clipboard
   clipboard.reset();
+  QVERIFY(!hasFileDescriptors());
+}
+
+void MSWindowsClipboardFilesTests::clipboard_goneWhileHeldOpen_takesTheFilesOff()
+{
+  Link link;
+  const ClipboardFileList list = copyOnA(link, {sourcePath("tree/a.txt")});
+  auto clipboard = std::make_unique<MSWindowsClipboardFiles>(link.remoteOfB);
+  const auto files = received("", &list);
+  clipboard->set(files.get());
+  QVERIFY(finished(*clipboard));
+  QVERIFY(hasFileDescriptors());
+
+  // another application has the clipboard open as it goes, for a moment
+  ClipboardHolder holder;
+  QVERIFY(holder.open());
+  std::thread later([&holder] {
+    Sleep(300);
+    holder.release();
+  });
+  clipboard.reset();
+  later.join();
+  QVERIFY(holder.closed());
   QVERIFY(!hasFileDescriptors());
 }
 

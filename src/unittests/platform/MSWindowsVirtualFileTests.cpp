@@ -18,6 +18,7 @@
 #include <ShlObj.h>
 
 #include <atomic>
+#include <string>
 
 namespace {
 
@@ -124,6 +125,35 @@ public:
 private:
   std::vector<MSWindowsVirtualFileEntry> m_entries;
   std::vector<QByteArray> m_contents;
+};
+
+//! Two files that trade places each time they are listed, as files that change on the other computer may
+class ChangingVirtualFileSource : public IMSWindowsVirtualFileSource
+{
+public:
+  bool list(std::vector<MSWindowsVirtualFileEntry> &entries) override
+  {
+    const int call = ++listCalls;
+    if (failListing) {
+      return false;
+    }
+    const MSWindowsVirtualFileEntry first = {L"first.txt", false, 5, 1767323046, 0};
+    const MSWindowsVirtualFileEntry second = {L"second.txt", false, 6, 1767323046, 1};
+    entries = (call % 2 == 1) ? std::vector{first, second} : std::vector{second, first};
+    return true;
+  }
+
+  std::unique_ptr<IMSWindowsVirtualFileReader> open(size_t id, uint64_t offset) override
+  {
+    // the identifier says which file it is, wherever it is in the list
+    return std::make_unique<MemoryVirtualFileReader>(
+        id == 0 ? QByteArrayLiteral("first") : QByteArrayLiteral("second"), offset, readCalls
+    );
+  }
+
+  std::atomic<int> listCalls = 0;
+  std::atomic<int> readCalls = 0;
+  std::atomic<bool> failListing = false;
 };
 
 namespace {
@@ -260,6 +290,114 @@ void MSWindowsVirtualFileTests::fileDescriptorListsAgainForAnotherPaste()
   ReleaseStgMedium(&medium);
   QCOMPARE(m_source->listCalls.load(), 2);
   QCOMPARE(object->EndOperation(S_OK, nullptr, DROPEFFECT_COPY), S_OK);
+
+  QCOMPARE(object->Release(), 0UL);
+}
+
+void MSWindowsVirtualFileTests::fileDescriptorStaysWhilePasteUsesIt()
+{
+  auto source = std::make_shared<ChangingVirtualFileSource>();
+  auto *object = new MSWindowsVirtualFileDataObject(source);
+  FORMATETC descriptors = descriptorFormat();
+  STGMEDIUM medium = {};
+  const auto contentsAt = [&](LONG index) {
+    FORMATETC contents = contentsFormat(index);
+    STGMEDIUM stream = {};
+    if (object->GetData(&contents, &stream) != S_OK) {
+      return QByteArray("no stream");
+    }
+    QByteArray data;
+    const bool read = readAll(stream.pstm, 4096, data);
+    ReleaseStgMedium(&stream);
+    return read ? data : QByteArray("read failed");
+  };
+  const auto listAgainLater = [&] {
+    QTest::qWait(3200);
+    const HRESULT result = object->GetData(&descriptors, &medium);
+    if (result == S_OK) {
+      ReleaseStgMedium(&medium);
+    }
+    return result;
+  };
+
+  QCOMPARE(object->GetData(&descriptors, &medium), S_OK);
+  ReleaseStgMedium(&medium);
+  QCOMPARE(source->listCalls.load(), 1);
+
+  // two copies at once, the first ends: the other still copies by the list it got
+  QCOMPARE(object->StartOperation(nullptr), S_OK);
+  QCOMPARE(object->StartOperation(nullptr), S_OK);
+  QCOMPARE(object->EndOperation(S_OK, nullptr, DROPEFFECT_COPY), S_OK);
+  QCOMPARE(listAgainLater(), S_OK);
+  QCOMPARE(source->listCalls.load(), 1);
+  QCOMPARE(object->EndOperation(S_OK, nullptr, DROPEFFECT_COPY), S_OK);
+
+  // a stream that is still read keeps the list as well
+  FORMATETC contents = contentsFormat(1);
+  STGMEDIUM open = {};
+  QCOMPARE(object->GetData(&contents, &open), S_OK);
+  QCOMPARE(object->liveStreams(), 1);
+  QCOMPARE(listAgainLater(), S_OK);
+  QCOMPARE(source->listCalls.load(), 1);
+  QByteArray data;
+  QVERIFY(readAll(open.pstm, 4096, data));
+  QCOMPARE(data, QByteArrayLiteral("second"));
+  ReleaseStgMedium(&open);
+  QCOMPARE(object->liveStreams(), 0);
+
+  // contents asked for a moment ago: that paste may ask for more
+  QCOMPARE(contentsAt(0), QByteArrayLiteral("first"));
+  QCOMPARE(object->GetData(&descriptors, &medium), S_OK);
+  ReleaseStgMedium(&medium);
+  QCOMPARE(source->listCalls.load(), 1);
+
+  // a while after the last paste: listed again, contents follow the new list
+  QCOMPARE(listAgainLater(), S_OK);
+  QCOMPARE(source->listCalls.load(), 2);
+  QCOMPARE(contentsAt(0), QByteArrayLiteral("second"));
+
+  // listing again fails: the list handed out last still serves the paste that has it
+  source->failListing = true;
+  QVERIFY(listAgainLater() != S_OK);
+  QCOMPARE(source->listCalls.load(), 3);
+  QCOMPARE(contentsAt(0), QByteArrayLiteral("second"));
+  QCOMPARE(contentsAt(1), QByteArrayLiteral("first"));
+
+  QCOMPARE(object->Release(), 0UL);
+}
+
+void MSWindowsVirtualFileTests::setDataKeepsOnlySmallValues()
+{
+  auto *object = new MSWindowsVirtualFileDataObject(m_source);
+  const auto setData = [&](CLIPFORMAT format, size_t size) {
+    HGLOBAL global = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, size);
+    FORMATETC etc = {format, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+    STGMEDIUM medium = {};
+    medium.tymed = TYMED_HGLOBAL;
+    medium.hGlobal = global;
+    const HRESULT result = object->SetData(&etc, &medium, TRUE);
+    if (result != S_OK) {
+      GlobalFree(global);
+    }
+    return result;
+  };
+
+  // what the shell keeps there is a few bytes
+  const auto performed = static_cast<CLIPFORMAT>(RegisterClipboardFormatW(CFSTR_PERFORMEDDROPEFFECT));
+  QCOMPARE(setData(performed, sizeof(DWORD)), S_OK);
+  QCOMPARE(setData(performed, 64 * 1024 + 1), E_OUTOFMEMORY);
+
+  // and a handful of formats
+  int kept = 0;
+  for (int index = 0; index < 100; ++index) {
+    const std::wstring name = L"DeskflowTestFormat" + std::to_wstring(index);
+    if (setData(static_cast<CLIPFORMAT>(RegisterClipboardFormatW(name.c_str())), 16) == S_OK) {
+      ++kept;
+    }
+  }
+  QVERIFY2(kept < 64, qPrintable(QString::number(kept)));
+  // a format it already has can still be changed
+  QCOMPARE(setData(performed, sizeof(DWORD)), S_OK);
 
   QCOMPARE(object->Release(), 0UL);
 }

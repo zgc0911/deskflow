@@ -25,6 +25,11 @@ namespace {
 
 const wchar_t *const kWindowName = L"DeskflowClipboardFiles";
 
+// another application may keep the clipboard open for a moment. it may even wait for this
+// thread meanwhile, to render what it reads from the clipboard Deskflow put there.
+const ULONGLONG kRetryForMs = 2000;
+const DWORD kRetryDelayMs = 10;
+
 //! Copy what a converter made into the data object, it is offered from memory
 void addConverted(
     MSWindowsVirtualFileDataObject &object, const IMSWindowsClipboardConverter &converter, const std::string &data
@@ -43,10 +48,41 @@ void addConverted(
   GlobalFree(converted);
 }
 
+//! Handle the messages of this thread for \p milliseconds, calls of other applications among them
+void handleMessagesFor(DWORD milliseconds)
+{
+  const ULONGLONG until = GetTickCount64() + milliseconds;
+  for (;;) {
+    MSG message;
+    while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+      TranslateMessage(&message);
+      DispatchMessageW(&message);
+    }
+    const ULONGLONG now = GetTickCount64();
+    if (now >= until) {
+      return;
+    }
+    MsgWaitForMultipleObjectsEx(0, nullptr, static_cast<DWORD>(until - now), QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+  }
+}
+
+//! True if the clipboard can be opened now, it is closed again
+bool clipboardFree(HWND window)
+{
+  if (!OpenClipboard(window)) {
+    return false;
+  }
+  CloseClipboard();
+  return true;
+}
+
 } // namespace
 
-MSWindowsClipboardFiles::MSWindowsClipboardFiles(std::shared_ptr<deskflow::RemoteFiles> files)
+MSWindowsClipboardFiles::MSWindowsClipboardFiles(
+    std::shared_ptr<deskflow::RemoteFiles> files, std::function<void()> written
+)
     : m_files(std::move(files)),
+      m_written(std::move(written)),
       m_wake(CreateEventW(nullptr, FALSE, FALSE, nullptr))
 {
   m_thread = std::thread([this] { run(); });
@@ -77,14 +113,28 @@ uint64_t MSWindowsClipboardFiles::filesPut() const
   return m_filesPut;
 }
 
-void MSWindowsClipboardFiles::post(Job job)
+MSWindowsClipboardFiles::Ownership MSWindowsClipboardFiles::ownership() const
 {
+  {
+    // jobs are posted by the thread that asks, so none comes in between
+    std::scoped_lock lock{m_mutex};
+    if (m_done != m_posted) {
+      return Ownership::Unknown;
+    }
+  }
+  return MSWindowsClipboard::isOwnedByDeskflow() ? Ownership::Deskflow : Ownership::Other;
+}
+
+uint64_t MSWindowsClipboardFiles::post(Job job)
+{
+  uint64_t number = 0;
   {
     std::scoped_lock lock{m_mutex};
     m_jobs.push_back(std::move(job));
-    ++m_posted;
+    number = ++m_posted;
   }
   SetEvent(m_wake);
+  return number;
 }
 
 bool MSWindowsClipboardFiles::waitUntilDone(int timeoutMs) const
@@ -97,7 +147,8 @@ void MSWindowsClipboardFiles::set(const IClipboard *clipboard)
 {
   if (clipboard == nullptr) {
     m_lastData.clear();
-    post([this] { empty(); });
+    m_lastDataJob = 0;
+    post([this] { return empty(); });
     return;
   }
 
@@ -106,26 +157,24 @@ void MSWindowsClipboardFiles::set(const IClipboard *clipboard)
   Clipboard::copy(copy.get(), clipboard);
   std::string data = copy->marshall();
 
-  // the same clipboard arrives once for each clipboard ID, write it only once unless it was replaced since
-  const DWORD written = m_sequenceAfterWrite;
-  if (data == m_lastData && written != 0 && written == GetClipboardSequenceNumber()) {
-    return;
+  // the same clipboard arrives once for each clipboard ID, a moment apart. the first is written,
+  // or is about to be: the second is left out, unless the first failed or was replaced since.
+  if (data == m_lastData && m_lastDataJob != 0) {
+    std::scoped_lock lock{m_mutex};
+    const bool waiting = m_done < m_lastDataJob;
+    const bool stillThere = m_writtenJob == m_lastDataJob && m_writtenSequence == GetClipboardSequenceNumber();
+    if (waiting || stillThere) {
+      return;
+    }
   }
-  m_lastData = std::move(data);
-  m_sequenceAfterWrite = 0;
 
   bool hasFiles = false;
   if (copy->open(copy->getTime())) {
     hasFiles = copy->has(IClipboard::Format::FileList);
     copy->close();
   }
-  post([this, copy, hasFiles] {
-    if (hasFiles) {
-      putFiles(*copy);
-    } else {
-      putFormats(*copy);
-    }
-  });
+  m_lastData = std::move(data);
+  m_lastDataJob = post([this, copy, hasFiles] { return hasFiles ? putFiles(*copy) : putFormats(*copy); });
 }
 
 void MSWindowsClipboardFiles::run()
@@ -147,20 +196,34 @@ void MSWindowsClipboardFiles::run()
   m_changed.notify_all();
 
   for (;;) {
-    std::deque<Job> jobs;
+    Job job;
     bool stop = false;
     {
       std::scoped_lock lock{m_mutex};
-      jobs.swap(m_jobs);
+      if (!m_jobs.empty()) {
+        job = std::move(m_jobs.front());
+        m_jobs.pop_front();
+      }
       stop = m_stop;
     }
-    for (auto &job : jobs) {
-      job();
+
+    if (job) {
+      const bool written = write(job);
+      bool idle = false;
       {
         std::scoped_lock lock{m_mutex};
         ++m_done;
+        if (written) {
+          m_writtenJob = m_done;
+          m_writtenSequence = GetClipboardSequenceNumber();
+        }
+        idle = m_done == m_posted;
       }
       m_changed.notify_all();
+      if (idle && m_written) {
+        m_written();
+      }
+      continue;
     }
     if (stop) {
       break;
@@ -169,11 +232,7 @@ void MSWindowsClipboardFiles::run()
     // calls from other applications arrive as messages, they are handled while waiting
     const DWORD woken = MsgWaitForMultipleObjectsEx(1, &m_wake, INFINITE, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
     if (woken == WAIT_OBJECT_0 + 1) {
-      MSG message;
-      while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
-        TranslateMessage(&message);
-        DispatchMessageW(&message);
-      }
+      handleMessagesFor(0);
     } else if (woken == WAIT_FAILED) {
       LOG_ERR("the clipboard thread can't wait: %d", static_cast<int>(GetLastError()));
       break;
@@ -182,8 +241,8 @@ void MSWindowsClipboardFiles::run()
 
   // the files can't be fetched once this process is gone: they are taken off the clipboard.
   // never flushed, that would fetch every one of them.
-  if (m_current != nullptr && OleIsCurrentClipboard(m_current) == S_OK) {
-    OleSetClipboard(nullptr);
+  if (m_current != nullptr && OleIsCurrentClipboard(m_current) == S_OK && !write([this] { return takeOff(); })) {
+    LOG_WARN("can't take the files of the other computer off the clipboard");
   }
   forgetCurrent();
   if (m_window != nullptr) {
@@ -191,6 +250,34 @@ void MSWindowsClipboardFiles::run()
   }
   if (SUCCEEDED(initialized)) {
     OleUninitialize();
+  }
+}
+
+bool MSWindowsClipboardFiles::write(const Job &job)
+{
+  const ULONGLONG giveUpAt = GetTickCount64() + kRetryForMs;
+  for (;;) {
+    const bool written = clipboardFree(m_window) && job();
+    // what was put there before is gone once the clipboard was emptied, whether or not the rest worked
+    if (m_current != nullptr && OleIsCurrentClipboard(m_current) != S_OK) {
+      forgetCurrent();
+    }
+    if (written) {
+      return true;
+    }
+
+    {
+      std::scoped_lock lock{m_mutex};
+      if (!m_jobs.empty()) {
+        LOG_DEBUG("can't change the clipboard now, a later change replaces this one");
+        return false;
+      }
+    }
+    if (GetTickCount64() >= giveUpAt) {
+      LOG_WARN("can't change the clipboard, another application keeps it open");
+      return false;
+    }
+    handleMessagesFor(kRetryDelayMs);
   }
 }
 
@@ -202,7 +289,7 @@ void MSWindowsClipboardFiles::forgetCurrent()
   }
 }
 
-void MSWindowsClipboardFiles::putFiles(const IClipboard &clipboard)
+bool MSWindowsClipboardFiles::putFiles(const IClipboard &clipboard)
 {
   deskflow::ClipboardFileList list;
   std::string fileList;
@@ -219,8 +306,7 @@ void MSWindowsClipboardFiles::putFiles(const IClipboard &clipboard)
   }
   if (!deskflow::ClipboardFileList::unmarshall(fileList, list)) {
     LOG_WARN("the list of copied files is not valid, the files can't be pasted");
-    putFormats(clipboard);
-    return;
+    return putFormats(clipboard);
   }
 
   auto source = std::make_shared<MSWindowsRemoteFileSource>(m_files, list);
@@ -240,39 +326,45 @@ void MSWindowsClipboardFiles::putFiles(const IClipboard &clipboard)
 
   const HRESULT result = OleSetClipboard(object);
   if (FAILED(result)) {
-    LOG_WARN("can't put the copied files on the clipboard: 0x%08x", static_cast<unsigned>(result));
     object->Release();
-    putFormats(clipboard);
-    return;
+    if (result == CLIPBRD_E_CANT_OPEN) {
+      // somebody else has the clipboard open, tried again in a moment
+      return false;
+    }
+    LOG_WARN("can't put the copied files on the clipboard: 0x%08x", static_cast<unsigned>(result));
+    return putFormats(clipboard);
   }
   // the clipboard holds a reference of its own
   forgetCurrent();
   m_current = object;
-  m_sequenceAfterWrite = GetClipboardSequenceNumber();
   ++m_filesPut;
   LOG_DEBUG("put %d files copied on the other computer on the clipboard", static_cast<int>(list.entries.size()));
+  return true;
 }
 
-void MSWindowsClipboardFiles::putFormats(const IClipboard &clipboard)
+bool MSWindowsClipboardFiles::putFormats(const IClipboard &clipboard) const
 {
   MSWindowsClipboard target(m_window);
-  if (!Clipboard::copy(&target, &clipboard)) {
-    LOG_WARN("failed to set the clipboard");
-  }
-  // emptying the clipboard dropped what was there before
-  forgetCurrent();
-  m_sequenceAfterWrite = GetClipboardSequenceNumber();
+  return Clipboard::copy(&target, &clipboard);
 }
 
-void MSWindowsClipboardFiles::empty()
+bool MSWindowsClipboardFiles::empty() const
 {
   MSWindowsClipboard target(m_window);
-  if (target.open(0)) {
-    target.empty();
-    target.close();
+  if (!target.open(0)) {
+    return false;
   }
-  forgetCurrent();
-  m_sequenceAfterWrite = GetClipboardSequenceNumber();
+  const bool emptied = target.empty();
+  target.close();
+  return emptied;
+}
+
+bool MSWindowsClipboardFiles::takeOff()
+{
+  if (m_current == nullptr || OleIsCurrentClipboard(m_current) != S_OK) {
+    return true;
+  }
+  return SUCCEEDED(OleSetClipboard(nullptr));
 }
 
 bool MSWindowsClipboardFiles::readFiles(HWND window, std::vector<std::string> &paths)
