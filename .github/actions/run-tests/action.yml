@@ -19,6 +19,8 @@ runs:
       id: unit-tests
       env:
         QT_QPA_PLATFORM: offscreen
+        # On Windows Qt Test writes to the debugger unless told otherwise, and a failure shows no details.
+        QT_FORCE_STDERR_LOGGING: 1
       run: |
         ctest --test-dir  "build/src/unittests" --output-on-failure
         result=$?
