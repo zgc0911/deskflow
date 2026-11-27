@@ -944,21 +944,20 @@ void FileTransferTests::request_rawPathTricks_refused()
       link.bToA.sendFileRequest(id++, request.kind, request.arguments);
     }
   });
-  // every request is answered by events that are queued behind this call
-  link.loop.call([] {});
-  link.loop.call([] {});
-
+  // the answers arrive later: looking for the file is done on another thread
   uint32_t id = 5000;
   for (const auto &request : requests) {
-    QVERIFY2(
+    QTRY_VERIFY2_WITH_TIMEOUT(
         link.askedByB.errorFor(id) == static_cast<uint32_t>(request.expected),
         qPrintable(QStringLiteral("request %1 got error %2, expected %3")
                        .arg(id)
                        .arg(link.askedByB.errorFor(id))
-                       .arg(static_cast<uint32_t>(request.expected)))
+                       .arg(static_cast<uint32_t>(request.expected))),
+        3000
     );
     ++id;
   }
+  QVERIFY(link.waitUntilAIsIdle());
   QVERIFY2(!link.askedByB.needleSeen, "contents of a file outside of the copied directory were sent");
   QCOMPARE(link.askedByB.totalData(), uint64_t{0});
   QCOMPARE(link.a->servedRequestCount(), size_t{0});

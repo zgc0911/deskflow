@@ -11,17 +11,17 @@
 
 #include <atomic>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <vector>
 
 class Event;
 class IEventQueue;
-class QDirIterator;
-class QFile;
 
 namespace deskflow {
 
@@ -243,18 +243,28 @@ public:
   encodeRequest(uint64_t offerId, uint32_t item, std::string_view relativePath, uint64_t offset, uint32_t credit);
 
 private:
+  struct ServedIo;
+  struct IoResult;
+  class Worker;
+
   //! A request of another computer that is being answered
   struct Served
   {
-    Served();
-    ~Served();
-    Served(Served &&) noexcept;
-    Served &operator=(Served &&) noexcept;
-
     uint8_t kind = 0;
-    std::unique_ptr<QFile> file;
-    std::unique_ptr<QDirIterator> listing;
-    //! Bytes the other computer is ready to receive
+    //! Tells this request from an earlier one with the same identifier
+    uint64_t serial = 0;
+    //! The open file or directory, used by the worker thread only
+    std::shared_ptr<ServedIo> io;
+    //! The file or directory was found and opened
+    bool opened = false;
+    //! The worker thread is working on this request
+    bool busy = false;
+    //! Everything was read, what is in \c ready is the rest
+    bool finished = false;
+    //! Read but not sent yet
+    std::deque<std::string> ready;
+    uint64_t readyBytes = 0;
+    //! Bytes the other computer is ready to receive and that were not read yet
     uint64_t credit = 0;
     uint64_t sent = 0;
   };
@@ -277,11 +287,15 @@ private:
   void sendError(IFileTransferChannel *channel, uint32_t requestId, Error error, const char *message);
   void pump(IFileTransferChannel *channel);
   //! Returns false when the request is finished and must be forgotten
-  bool pumpListing(const ServedKey &key, Served &served);
-  bool pumpRead(const ServedKey &key, Served &served);
+  bool pumpServed(const ServedKey &key, Served &served);
+  //! Let the worker thread do \p job for a request, jobFinished() gets the result
+  void runJob(const ServedKey &key, uint64_t serial, std::function<IoResult()> job);
+  void jobFinished(const ServedKey &key, uint64_t serial, IoResult &result);
 
   IEventQueue *m_events = nullptr;
   bool m_enabled = true;
+  //! The registry is also used by the worker thread
+  std::mutex m_registryMutex;
   FileOfferRegistry m_registry;
 
   //! Which channel leads to the computer that offers a list, oldest first
@@ -289,6 +303,11 @@ private:
   //! Which channel each of our own requests was sent on
   std::map<uint32_t, IFileTransferChannel *> m_requestChannels;
   std::map<ServedKey, Served> m_served;
+  uint64_t m_nextSerial = 0;
+  //! File data written to a channel since it last reported that everything left for the network
+  std::map<IFileTransferChannel *, uint64_t> m_unflushed;
+  //! Reads the local files, created when the first request arrives
+  std::unique_ptr<Worker> m_worker;
 
   //! State shared with readers on other threads
   std::shared_ptr<FileTransferShared> m_shared;
