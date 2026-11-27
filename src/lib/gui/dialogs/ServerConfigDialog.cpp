@@ -80,6 +80,7 @@ void ServerConfigDialog::save()
   Settings::setValue(Settings::Server::Protocol, networkProtocolToOption(m_protocol));
   Settings::setValue(Settings::Server::EnableClipboard, m_enableClipboard);
   Settings::setValue(Settings::Server::ClipboardSize, m_clipboardSize);
+  Settings::setValue(Settings::Server::EnableFileSharing, m_enableFileSharing);
   Settings::setValue(Settings::Server::EnableHeartbeat, m_enableHeartbeat);
   Settings::setValue(Settings::Server::Heartbeat, m_heartbeatRate);
   Settings::setValue(Settings::Server::EnableSwitchDelay, m_enableSwitchDelay);
@@ -245,6 +246,17 @@ void ServerConfigDialog::toggleClipboard(bool enabled)
     m_clipboardSize = Settings::defaultValue(Settings::Server::ClipboardSize).toUInt();
     ui->sbClipboardSizeLimit->setValue(m_clipboardSize ? m_clipboardSize : 1);
   }
+  // files are shared through the clipboard
+  ui->cbEnableFileSharing->setEnabled(enabled && Settings::isWritable());
+  setButtonBoxEnabledButtons();
+}
+
+void ServerConfigDialog::toggleFileSharing(bool enabled)
+{
+  if (m_enableFileSharing == enabled)
+    return;
+
+  m_enableFileSharing = enabled;
   setButtonBoxEnabledButtons();
 }
 
@@ -400,6 +412,7 @@ void ServerConfigDialog::loadFromConfig()
   m_disableLockToComputer = Settings::value(Settings::Server::DisableLockToComputer).toBool();
   m_enableClipboard = Settings::value(Settings::Server::EnableClipboard).toBool();
   m_clipboardSize = Settings::value(Settings::Server::ClipboardSize).toUInt();
+  m_enableFileSharing = Settings::value(Settings::Server::EnableFileSharing).toBool();
 
   ui->lineConfigFile->setText(serverConfig().configFile());
   ui->groupExternalConfig->setChecked(serverConfig().useExternalConfig());
@@ -461,6 +474,8 @@ void ServerConfigDialog::refreshControls()
   ui->cbEnableClipboard->setChecked(m_enableClipboard);
   ui->sbClipboardSizeLimit->setEnabled(m_enableClipboard);
   ui->sbClipboardSizeLimit->setValue(m_clipboardSize);
+  ui->cbEnableFileSharing->setChecked(m_enableFileSharing);
+  ui->cbEnableFileSharing->setEnabled(m_enableClipboard && Settings::isWritable());
 }
 
 void ServerConfigDialog::initConnections() const
@@ -502,6 +517,7 @@ void ServerConfigDialog::initConnections() const
 
   connect(ui->cbRelativeMouseMoves, &QCheckBox::toggled, this, &ServerConfigDialog::toggleRelativeMouseMoves);
   connect(ui->cbEnableClipboard, &QCheckBox::toggled, this, &ServerConfigDialog::toggleClipboard);
+  connect(ui->cbEnableFileSharing, &QCheckBox::toggled, this, &ServerConfigDialog::toggleFileSharing);
   connect(ui->btnBrowseConfigFile, &QPushButton::clicked, this, &ServerConfigDialog::browseConfigFile);
   connect(ui->groupExternalConfig, &QGroupBox::toggled, this, &ServerConfigDialog::toggleExternalConfig);
   connect(ui->lineConfigFile, &QLineEdit::textChanged, this, &ServerConfigDialog::setServerConfig);
@@ -528,6 +544,7 @@ void ServerConfigDialog::updateControls() const
   ui->cbDisableLockToComputer->setEnabled(writable);
   ui->cbEnableClipboard->setEnabled(writable);
   ui->sbClipboardSizeLimit->setEnabled(writable);
+  ui->cbEnableFileSharing->setEnabled(writable && m_enableClipboard);
   ui->rbProtocolBarrier->setEnabled(writable);
   ui->rbProtocolSynergy->setEnabled(writable);
   ui->cbHeartbeat->setEnabled(writable);
@@ -556,6 +573,7 @@ void ServerConfigDialog::restoreFromDefaults()
   m_disableLockToComputer = Settings::defaultValue(Settings::Server::DisableLockToComputer).toBool();
   m_enableClipboard = Settings::defaultValue(Settings::Server::EnableClipboard).toBool();
   m_clipboardSize = Settings::defaultValue(Settings::Server::ClipboardSize).toUInt();
+  m_enableFileSharing = Settings::defaultValue(Settings::Server::EnableFileSharing).toBool();
 
   ui->groupExternalConfig->setChecked(Settings::defaultValue(Settings::Server::ExternalConfig).toBool());
   ui->lineConfigFile->setText(Settings::defaultValue(Settings::Server::ExternalConfigFile).toString());
@@ -597,6 +615,7 @@ bool ServerConfigDialog::isGeneralConfigModified() const
          m_protocol != Settings::networkProtocol() ||
          m_enableClipboard != Settings::value(Settings::Server::EnableClipboard).toBool() ||
          m_clipboardSize != Settings::value(Settings::Server::ClipboardSize).toUInt() ||
+         m_enableFileSharing != Settings::value(Settings::Server::EnableFileSharing).toBool() ||
          m_enableHeartbeat != Settings::value(Settings::Server::EnableHeartbeat).toBool() ||
          m_heartbeatRate != Settings::value(Settings::Server::Heartbeat).toInt() ||
          m_enableSwitchDelay != Settings::value(Settings::Server::EnableSwitchDelay).toBool() ||
@@ -616,6 +635,7 @@ bool ServerConfigDialog::isGeneralConfigDefault() const
          m_protocol == networkProtocolFromString(Settings::defaultValue(Settings::Server::Protocol).toString()) &&
          m_enableClipboard == Settings::defaultValue(Settings::Server::EnableClipboard).toBool() &&
          m_clipboardSize == Settings::defaultValue(Settings::Server::ClipboardSize).toUInt() &&
+         m_enableFileSharing == Settings::defaultValue(Settings::Server::EnableFileSharing).toBool() &&
          m_enableHeartbeat == Settings::defaultValue(Settings::Server::EnableHeartbeat).toBool() &&
          m_heartbeatRate == Settings::defaultValue(Settings::Server::Heartbeat).toInt() &&
          m_enableSwitchDelay == Settings::defaultValue(Settings::Server::EnableSwitchDelay).toBool() &&

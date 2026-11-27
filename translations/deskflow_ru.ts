@@ -1098,6 +1098,14 @@ Enabling this setting will disable the server config GUI.</source>
         <source>Enable lock to computer at startup</source>
         <translation>Включать привязку к компьютеру при запуске</translation>
     </message>
+    <message>
+        <source>Files copied on one computer can be pasted on another, they are sent when they are pasted.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Share copied files through the clipboard</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>SettingsDialog</name>

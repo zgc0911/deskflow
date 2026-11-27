@@ -111,4 +111,11 @@ void SettingsTests::checkClearState()
   QVERIFY(!Settings::value(Settings::Gui::WindowGeometry).toRect().isValid());
 }
 
+void SettingsTests::fileSharing_isOnByDefault()
+{
+  // shared like the rest of the clipboard unless turned off
+  QVERIFY(Settings::defaultValue(Settings::Server::EnableFileSharing).toBool());
+  QVERIFY(Settings::defaultValue(Settings::Server::EnableClipboard).toBool());
+}
+
 QTEST_MAIN(SettingsTests)

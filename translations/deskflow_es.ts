@@ -1100,6 +1100,14 @@ Al habilitar esta opción, se deshabilitará la interfaz gráfica de usuario (GU
         <source>Enable lock to computer at startup</source>
         <translation type="unfinished">Activar el bloqueo del ordenador al iniciar</translation>
     </message>
+    <message>
+        <source>Files copied on one computer can be pasted on another, they are sent when they are pasted.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Share copied files through the clipboard</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>SettingsDialog</name>

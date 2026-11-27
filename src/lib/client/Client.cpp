@@ -343,6 +343,14 @@ void Client::setOptions(const OptionsList &options)
       if (index != options.end()) {
         m_maximumClipboardSize = *index;
       }
+    } else if (id == kOptionFileSharing) {
+      index++;
+      if (index != options.end()) {
+        if (*index == 0) {
+          LOG_INFO("sharing files through the clipboard disabled by server");
+        }
+        m_computer->fileTransfer().setEnabled(*index != 0);
+      }
     } else if (id == kOptionRelativeMouseMoves) {
       index++;
       if (index != options.end()) {

@@ -455,6 +455,19 @@
             </item>
            </layout>
           </item>
+          <item>
+           <widget class="QCheckBox" name="cbEnableFileSharing">
+            <property name="toolTip">
+             <string>Files copied on one computer can be pasted on another, they are sent when they are pasted.</string>
+            </property>
+            <property name="text">
+             <string>Share copied files through the clipboard</string>
+            </property>
+            <property name="checked">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
          </layout>
         </widget>
        </item>
@@ -917,6 +930,7 @@ Enabling this setting will disable the server config GUI.</string>
   <tabstop>sbSwitchDoubleTap</tabstop>
   <tabstop>cbEnableClipboard</tabstop>
   <tabstop>sbClipboardSizeLimit</tabstop>
+  <tabstop>cbEnableFileSharing</tabstop>
   <tabstop>cbHeartbeat</tabstop>
   <tabstop>sbHeartbeat</tabstop>
   <tabstop>cbRelativeMouseMoves</tabstop>

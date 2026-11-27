@@ -10,3 +10,12 @@ create_test(
   SOURCE LoggerTests.cpp
   WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/src/lib/gui"
 )
+
+create_test(
+  NAME ServerConfigDialogTests
+  DEPENDS gui
+  SOURCE ServerConfigDialogTests.cpp
+  WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/src/lib/gui"
+)
+# the headers of the dialogs find one another from there
+target_include_directories(ServerConfigDialogTests PRIVATE "${CMAKE_SOURCE_DIR}/src/lib/gui")

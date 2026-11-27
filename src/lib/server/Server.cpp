@@ -1116,6 +1116,11 @@ void Server::processOptions()
       if (!m_enableClipboard) {
         LOG_INFO("clipboard sharing is disabled");
       }
+    } else if (id == kOptionFileSharing) {
+      m_computer->fileTransfer().setEnabled(value != 0);
+      if (value == 0) {
+        LOG_INFO("sharing files through the clipboard is disabled");
+      }
     } else if (id == kOptionClipboardSharingSize) {
       if (value <= 0) {
         m_maximumClipboardSize = 0;

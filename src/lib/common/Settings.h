@@ -107,6 +107,7 @@ public:
     inline static const auto DefaultLockToComputerState = QStringLiteral("server/defaultLockToComputerState");
     inline static const auto DisableLockToComputer = QStringLiteral("server/disableLockToComputer");
     inline static const auto EnableClipboard = QStringLiteral("server/enableClipboard");
+    inline static const auto EnableFileSharing = QStringLiteral("server/enableFileSharing");
     inline static const auto EnableHeartbeat = QStringLiteral("server/enableHeartbeat");
     inline static const auto EnableSwitchDelay = QStringLiteral("server/enableSwitchDelay");
     inline static const auto EnableSwitchDoubleTap = QStringLiteral("server/enableSwitchDoubleTap");
@@ -324,6 +325,7 @@ private:
     , Server::DefaultLockToComputerState
     , Server::DisableLockToComputer
     , Server::EnableClipboard
+    , Server::EnableFileSharing
     , Server::EnableHeartbeat
     , Server::EnableSwitchDelay
     , Server::EnableSwitchDoubleTap
@@ -377,6 +379,7 @@ private:
     , Security::TlsEnabled
     , Security::CheckPeers
     , Server::EnableClipboard
+    , Server::EnableFileSharing
     , Server::Win32KeepForeground
   };
 

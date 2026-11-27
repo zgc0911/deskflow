@@ -1100,6 +1100,14 @@ L&apos;abilitazione di questa impostazione disabiliterà l&apos;interfaccia graf
         <source>Enable lock to computer at startup</source>
         <translation type="unfinished">Abilita il blocco al computer all&apos;avvio</translation>
     </message>
+    <message>
+        <source>Files copied on one computer can be pasted on another, they are sent when they are pasted.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Share copied files through the clipboard</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>SettingsDialog</name>

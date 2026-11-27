@@ -7,7 +7,10 @@
 
 #include "ServerConfigTests.h"
 
+#include "common/Settings.h"
 #include "server/Config.h"
+
+#include <sstream>
 
 class OnlySystemFilter : public InputFilter::Condition
 {
@@ -29,6 +32,13 @@ public:
 };
 
 using namespace deskflow::server;
+
+void ServerConfigTests::initTestCase()
+{
+  QVERIFY(m_settingsDir.isValid());
+  Settings::setSettingsFile(m_settingsDir.filePath("Deskflow.conf"));
+  m_arch.init();
+}
 
 void ServerConfigTests::equalityCheck()
 {
@@ -159,6 +169,41 @@ void ServerConfigTests::equalityCheck_diff_neighbours3()
   QVERIFY(b.addComputer("computerC"));
   QVERIFY(b.connect("computerA", Direction::Bottom, 0.0f, 0.5f, "computerC", 0.5f, 1.0f));
   QVERIFY(a != b);
+}
+
+void ServerConfigTests::options_fileSharing_followsTheSettings_data()
+{
+  QTest::addColumn<bool>("clipboard");
+  QTest::addColumn<bool>("files");
+  QTest::addColumn<int>("sent");
+
+  QTest::newRow("both on") << true << true << 1;
+  QTest::newRow("files off") << true << false << 0;
+  // files go through the clipboard, they are not shared where it is not
+  QTest::newRow("clipboard off") << false << true << 0;
+  QTest::newRow("both off") << false << false << 0;
+}
+
+void ServerConfigTests::options_fileSharing_followsTheSettings()
+{
+  QFETCH(bool, clipboard);
+  QFETCH(bool, files);
+  QFETCH(int, sent);
+  Settings::setValue(Settings::Server::EnableClipboard, clipboard);
+  Settings::setValue(Settings::Server::EnableFileSharing, files);
+
+  // what the server tells its clients, and goes by itself
+  Config config(nullptr);
+  std::istringstream text("section: options\nend\n");
+  text >> config;
+  const Config::ScreenOptions *options = config.getOptions("");
+  QVERIFY(options != nullptr);
+  const auto found = options->find(kOptionFileSharing);
+  QVERIFY(found != options->end());
+  QCOMPARE(found->second, sent);
+
+  Settings::setValue(Settings::Server::EnableClipboard);
+  Settings::setValue(Settings::Server::EnableFileSharing);
 }
 
 QTEST_MAIN(ServerConfigTests)

@@ -317,11 +317,17 @@ Paths of the computer that offers the files are never sent. A file is referred t
 
 The computer that pastes sends @ref kMsgDFileRequest to the computer the file list came from, either to list a directory or to read a file from an offset. The answer is a series of @ref kMsgDFileResponse messages with data, closed by one that marks the end or an error.
 
-File data is sent in pieces of at most 64 KiB and never more than the reader has made room for. The request states how many bytes the reader is ready to receive. With @ref kMsgDFileCredit the reader grants more as it uses up what it received. This keeps the amount of file data that is on its way small, so input events that share the connection are not held up behind it. @ref kMsgDFileCancel abandons a request.
+File data is sent in pieces of at most 64 KiB and never more than the reader has made room for. A piece is never empty, an empty one is ignored. The request states how many bytes the reader is ready to receive. With @ref kMsgDFileCredit the reader grants more as it uses up what it received. This keeps the amount of file data that is on its way small, so input events that share the connection are not held up behind it. Requests on one connection take turns. @ref kMsgDFileCancel abandons a request.
 
-A request is refused with an error if file sharing is turned off, if the list is no longer offered, or if the path leads anywhere but to the copied files and what is inside the copied directories. Symbolic links are neither listed nor followed.
+A request is refused with an error if file sharing is turned off, if the list is no longer offered, or if the path leads anywhere but to the copied files and what is inside the copied directories. Symbolic links, junctions and mount points are neither listed nor followed: a request whose path goes through one is refused. A Windows shortcut is a file like any other. A directory that can not be read in full is answered with an error, not with the part that could be read.
+
+A computer ignores a file list that uses the identifier of one of its own lists, the files it names are on that computer.
 
 Time passes between copying and pasting, and a copied file may be changed or deleted in between. A request to list that names the entry index `0xFFFFFFFF` and an empty path is answered with the entries of the file list themselves, in the order of the list and as they are at that moment. An entry that no longer exists has bit 1 of its flags set.
+
+### Turning it off
+
+The server turns file sharing on or off, for itself and for every client, with the option `FILS` in @ref kMsgDSetOptions: 1 is on, 0 is off. It is off wherever clipboard sharing is off. A computer with file sharing off sends no file lists, refuses requests and ignores the file lists it receives.
 
 ### Compatibility
 

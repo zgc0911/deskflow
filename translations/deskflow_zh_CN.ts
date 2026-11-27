@@ -1102,6 +1102,14 @@ Enabling this setting will disable the server config GUI.</source>
         <source>Enable lock to computer at startup</source>
         <translation type="unfinished">启动时启用锁定到计算机</translation>
     </message>
+    <message>
+        <source>Files copied on one computer can be pasted on another, they are sent when they are pasted.</source>
+        <translation>在一台电脑上复制的文件可以到另一台电脑上粘贴，粘贴时才传。</translation>
+    </message>
+    <message>
+        <source>Share copied files through the clipboard</source>
+        <translation>通过剪贴板共享复制的文件</translation>
+    </message>
 </context>
 <context>
     <name>SettingsDialog</name>
