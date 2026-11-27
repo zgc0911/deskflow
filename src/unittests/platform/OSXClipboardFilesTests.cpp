@@ -119,6 +119,10 @@ void OSXClipboardFilesTests::initTestCase()
   if (!QFileInfo::exists("/sbin/mount_nfs")) {
     QSKIP("this system has no NFS client");
   }
+  // a build machine may not let its user mount, nearly everything here needs it
+  if (!PasteSide().mounted) {
+    QSKIP("this user can not mount an NFS volume here");
+  }
   m_source = std::make_unique<QTemporaryDir>();
   QVERIFY(m_source->isValid());
   QVERIFY(QDir().mkpath(sourcePath(QStringLiteral("文件夹/inside"))));

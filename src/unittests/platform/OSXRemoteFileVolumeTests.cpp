@@ -323,6 +323,10 @@ void OSXRemoteFileVolumeTests::initTestCase()
   if (!QFileInfo::exists("/sbin/mount_nfs")) {
     QSKIP("this system has no NFS client");
   }
+  // a build machine may not let its user mount, everything here needs it
+  if (!Pasting().mounted) {
+    QSKIP("this user can not mount an NFS volume here");
+  }
   m_source = std::make_unique<QTemporaryDir>();
   QVERIFY(m_source->isValid());
 
