@@ -10,8 +10,9 @@
 #include "deskflow/IClient.h"
 
 namespace deskflow {
+class FileTransfer;
 class IStream;
-}
+} // namespace deskflow
 
 //! Generic proxy for client or primary
 class BaseClientProxy : public IClient
@@ -80,6 +81,16 @@ public:
   virtual void fileChunkSending(uint8_t mark, char *data, size_t dataSize) = 0;
   virtual std::string getSecureInputApp() const = 0;
   virtual void secureInputNotification(const std::string &app) const = 0;
+
+  //! Set the object that shares the files on the clipboard
+  /*!
+  Only a client that can exchange file transfer messages makes use of it.
+  */
+  virtual void setFileTransfer(deskflow::FileTransfer *fileTransfer)
+  {
+    (void)fileTransfer;
+  }
+
   std::string getName() const override;
   virtual deskflow::IStream *getStream() const = 0;
 

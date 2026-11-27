@@ -8,6 +8,8 @@
 #include "deskflow/Computer.h"
 #include "base/IEventQueue.h"
 #include "base/Log.h"
+#include "deskflow/FileTransfer.h"
+#include "deskflow/IClipboard.h"
 #include "deskflow/IPlatformComputer.h"
 
 #include <QProcess>
@@ -49,9 +51,12 @@ Computer::Computer(IPlatformComputer *platformComputer, IEventQueue *events)
     : m_computer(platformComputer),
       m_isPrimary(platformComputer->isPrimary()),
       m_entered(m_isPrimary),
-      m_events(events)
+      m_events(events),
+      m_fileTransfer(std::make_unique<FileTransfer>(events))
 {
   assert(m_computer != nullptr);
+
+  m_computer->setFileTransfer(m_fileTransfer.get());
 
   // reset options
   resetOptions();
@@ -396,7 +401,25 @@ void *Computer::getEventTarget() const
 
 bool Computer::getClipboard(ClipboardID id, IClipboard *clipboard) const
 {
-  return m_computer->getClipboard(id, clipboard);
+  const bool result = m_computer->getClipboard(id, clipboard);
+  if (!result || id != kClipboardClipboard) {
+    return result;
+  }
+
+  // copied files are not part of what the platform clipboard hands over: other
+  // computers get a list of them and ask for the contents when they are pasted
+  std::vector<std::string> paths;
+  std::string fileList;
+  if (m_computer->getClipboardFiles(id, paths) && !paths.empty()) {
+    fileList = m_fileTransfer->offerLocalFiles(paths);
+  } else {
+    m_fileTransfer->withdrawLocalFiles();
+  }
+  if (!fileList.empty() && clipboard->open(clipboard->getTime())) {
+    clipboard->add(IClipboard::Format::FileList, fileList);
+    clipboard->close();
+  }
+  return result;
 }
 
 void Computer::getShape(int32_t &x, int32_t &y, int32_t &w, int32_t &h) const

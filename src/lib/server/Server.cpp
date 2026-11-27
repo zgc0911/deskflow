@@ -13,6 +13,7 @@
 #include "deskflow/AppUtil.h"
 #include "deskflow/Computer.h"
 #include "deskflow/DeskflowException.h"
+#include "deskflow/FileTransfer.h"
 #include "deskflow/IPlatformComputer.h"
 #include "deskflow/OptionTypes.h"
 #include "deskflow/PacketStreamFilter.h"
@@ -269,6 +270,9 @@ void Server::adoptClient(BaseClientProxy *client)
   LOG_DEBUG("client \"%s\" has connected", getName(client).c_str());
   ipcSendConnectionState(deskflow::core::ConnectionState::Connected);
   sendConnectedClientsIpc();
+
+  // let the client exchange the files on the clipboard
+  client->setFileTransfer(&m_computer->fileTransfer());
 
   // send configuration options to client
   sendOptions(client);
@@ -1129,6 +1133,9 @@ void Server::processOptions()
   }
   m_relativeMoves = newRelativeMoves;
   m_protocol = Settings::networkProtocol();
+
+  // files are shared through the clipboard, so not without it
+  m_computer->fileTransfer().setEnabled(m_enableClipboard && m_maximumClipboardSize != 0);
 }
 
 void Server::handleShapeChanged(BaseClientProxy *client)

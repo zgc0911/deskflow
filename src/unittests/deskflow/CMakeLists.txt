@@ -22,6 +22,30 @@ create_test(
 )
 
 create_test(
+  NAME ClipboardFileListTests
+  DEPENDS app
+  LIBS arch base io ${extra_libs}
+  SOURCE ClipboardFileListTests.cpp
+  WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/src/lib/deskflow"
+)
+
+create_test(
+  NAME FileOfferRegistryTests
+  DEPENDS app
+  LIBS arch base io ${extra_libs}
+  SOURCE FileOfferRegistryTests.cpp
+  WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/src/lib/deskflow"
+)
+
+create_test(
+  NAME FileTransferTests
+  DEPENDS app
+  LIBS arch base io mt ${extra_libs}
+  SOURCE FileTransferTests.cpp
+  WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/src/lib/deskflow"
+)
+
+create_test(
   NAME IKeyStateTests
   DEPENDS app
   LIBS arch base ${extra_libs}

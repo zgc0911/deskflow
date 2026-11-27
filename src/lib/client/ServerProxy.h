@@ -11,10 +11,12 @@
 #include "common/Enums.h"
 #include "deskflow/ClipboardChunk.h"
 #include "deskflow/ClipboardTypes.h"
+#include "deskflow/FileTransfer.h"
 #include "deskflow/KeyTypes.h"
 
 class Client;
 class ClientInfo;
+class Clipboard;
 class EventQueueTimer;
 class IClipboard;
 namespace deskflow {
@@ -29,7 +31,7 @@ to the server and messages from the server to calls on the client.
 It implements 1.6, the oldest version the client supports; later
 versions subclass it and add their messages.
 */
-class ServerProxy
+class ServerProxy : public deskflow::IFileTransferChannel
 {
 public:
   /*!
@@ -51,7 +53,20 @@ public:
   bool onGrabClipboard(ClipboardID);
   void onClipboardChanged(ClipboardID, const IClipboard *);
 
+  //! Set the object that shares the files on the clipboard
+  /*!
+  Without it file lists from the server are dropped and file transfer
+  messages are ignored.
+  */
+  void setFileTransfer(deskflow::FileTransfer *fileTransfer);
+
   //@}
+
+  // IFileTransferChannel overrides
+  void sendFileRequest(uint32_t requestId, uint8_t kind, const std::string &arguments) override;
+  void sendFileResponse(uint32_t requestId, uint8_t mark, const std::string &content) override;
+  void sendFileCredit(uint32_t requestId, uint32_t bytes) override;
+  void sendFileCancel(uint32_t requestId) override;
 
 protected:
   enum class ConnectionResult
@@ -70,6 +85,13 @@ protected:
   {
     return m_stream;
   }
+
+  //! Keep or drop the list of copied files in a clipboard from the server
+  /*!
+  The list stays only if file sharing is on and the list is well formed.
+  From then on the files it names can be asked for over this connection.
+  */
+  void acceptFileList(Clipboard &clipboard);
 
 private:
   // if compressing mouse motion then send the last motion now
@@ -107,6 +129,10 @@ private:
   void setOptions();
   void queryInfo();
   void infoAcknowledgment();
+  void fileRequest();
+  void fileResponse();
+  void fileCredit();
+  void fileCancel();
 
 private:
   using MessageParser = ConnectionResult (ServerProxy::*)(const uint8_t *);
@@ -134,4 +160,5 @@ private:
   IEventQueue *m_events = nullptr;
   std::string m_clipboardDataCached;
   ClipboardChunkAssemblyState m_clipboardChunkState;
+  deskflow::FileTransfer *m_fileTransfer = nullptr;
 };

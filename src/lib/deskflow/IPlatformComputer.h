@@ -15,7 +15,13 @@
 #include "deskflow/ISecondaryComputer.h"
 #include "deskflow/OptionTypes.h"
 
+#include <string>
+#include <vector>
+
 class IClipboard;
+namespace deskflow {
+class FileTransfer;
+}
 
 //! Computer interface
 /*!
@@ -76,6 +82,33 @@ public:
   Set the contents of the system clipboard indicated by \c id.
   */
   virtual bool setClipboard(ClipboardID id, const IClipboard *) = 0;
+
+  //! Get the files on the clipboard
+  /*!
+  Appends the absolute paths (UTF-8) of the files and directories held by
+  the system clipboard indicated by \c id to \c paths.  Returns false if
+  the clipboard holds no files or the platform does not support sharing
+  them.  Files that were put on the clipboard by setClipboard() on behalf
+  of another computer are not reported.
+  */
+  virtual bool getClipboardFiles(ClipboardID id, std::vector<std::string> &paths) const
+  {
+    (void)id;
+    (void)paths;
+    return false;
+  }
+
+  //! Give access to the files offered by other computers
+  /*!
+  Called once, before the computer is enabled.  A platform that can paste
+  files from other computers keeps \c fileTransfer and uses it when
+  setClipboard() is given a clipboard with IClipboard::Format::FileList.
+  The object outlives the platform computer.
+  */
+  virtual void setFileTransfer(deskflow::FileTransfer *fileTransfer)
+  {
+    (void)fileTransfer;
+  }
 
   //! Check clipboard owner
   /*!

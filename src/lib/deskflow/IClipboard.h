@@ -45,12 +45,19 @@ public:
   \c kHTML is a text format encoded in UTF-8 and containing a valid
   HTML fragment (but not necessarily a complete HTML document).
   Newlines are LF.
+
+  \c FileList is a list of copied files and directories as encoded by
+  deskflow::ClipboardFileList.  It names the files only; their contents
+  are requested from the computer that copied them when they are pasted.
+  Platform clipboards do not produce or consume this format themselves,
+  see IPlatformComputer::getClipboardFiles().
   */
   enum class Format
   {
     Text,        //!< Text format, UTF-8, newline is LF
     HTML,        //!< HTML format, HTML fragment, UTF-8, newline is LF
     Bitmap,      //!< Bitmap format, BMP 24/32bpp, BI_RGB
+    FileList,    //!< List of copied files, see deskflow::ClipboardFileList
     TotalFormats //!< The number of clipboard formats supported
   };
 

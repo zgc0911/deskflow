@@ -19,6 +19,7 @@
 #include "deskflow/Clipboard.h"
 #include "deskflow/Computer.h"
 #include "deskflow/DeskflowException.h"
+#include "deskflow/FileTransfer.h"
 #include "deskflow/IPlatformComputer.h"
 #include "deskflow/PacketStreamFilter.h"
 #include "deskflow/ProtocolTypes.h"
@@ -358,6 +359,9 @@ void Client::setOptions(const OptionsList &options)
     LOG_INFO("clipboard sharing is disabled because the server set the maximum clipboard size to 0");
   }
 
+  // files are shared through the clipboard, so not without it
+  m_computer->fileTransfer().setEnabled(m_enableClipboard);
+
   m_computer->setOptions(options);
 }
 
@@ -488,6 +492,7 @@ bool Client::setupComputer(int16_t protocolMinor)
   }
 
   if (m_server != nullptr) {
+    m_server->setFileTransfer(&m_computer->fileTransfer());
     m_events->addHandler(EventTypes::ComputerShapeChanged, getEventTarget(), [this](const auto &) {
       handleShapeChanged();
     });

@@ -154,6 +154,10 @@ This table lists all protocol messages in alphabetical order. For a typical sequ
 | [**CSEC**](@ref kMsgCScreenSaver) | @ref kMsgCScreenSaver | Command | Server→Client | Screen saver control | [MsgSize](#constraint-protocol-max-message-length) | 1.0+ |
 | [**DCLP**](@ref kMsgDClipboard) | @ref kMsgDClipboard | Data | Both | Clipboard data | [MsgSize](#constraint-protocol-max-message-length) | 1.0+ |
 | [**DDRG**](@ref kMsgDDragInfo) | @ref kMsgDDragInfo | Data | Server→Client | Drag file info | [MsgSize](#constraint-protocol-max-message-length), [ListSize](#constraint-max-list) | 1.5+ |
+| [**DFCN**](@ref kMsgDFileCancel) | @ref kMsgDFileCancel | Data | Both | Abandon a clipboard file request | [MsgSize](#constraint-protocol-max-message-length) | [Any](#sharing-files-through-the-clipboard) |
+| [**DFCR**](@ref kMsgDFileCredit) | @ref kMsgDFileCredit | Data | Both | Grant room for more file data | [MsgSize](#constraint-protocol-max-message-length) | [Any](#sharing-files-through-the-clipboard) |
+| [**DFRQ**](@ref kMsgDFileRequest) | @ref kMsgDFileRequest | Data | Both | List a directory or read a file on the clipboard | [MsgSize](#constraint-protocol-max-message-length) | [Any](#sharing-files-through-the-clipboard) |
+| [**DFRS**](@ref kMsgDFileResponse) | @ref kMsgDFileResponse | Data | Both | Answer to a clipboard file request | [MsgSize](#constraint-protocol-max-message-length) | [Any](#sharing-files-through-the-clipboard) |
 | [**DFTR**](@ref kMsgDFileTransfer) | @ref kMsgDFileTransfer | Data | Both | File transfer data | [MsgSize](#constraint-protocol-max-message-length) | 1.5+ |
 | [**DINF**](@ref kMsgDInfo) | @ref kMsgDInfo | Data | Client→Server | Computer information | [MsgSize](#constraint-protocol-max-message-length) | 1.0+ |
 | [**DKDL**](@ref kMsgDKeyDown) | @ref kMsgDKeyDown | Data | Server→Client | Key down with language | [MsgSize](#constraint-protocol-max-message-length), [KeyMap](#constraint-keymap) | 1.8+ |
@@ -278,6 +282,50 @@ A modifier (modifier mask) represents the state of modifier keys (like Shift, Co
 - When a new client connects, the server creates a temporary @ref ClientProxyUnknown to handle the version handshake
 - A one-shot timer is started for 30 seconds
 - If the client fails to respond in time, the @ref protocol_errors function is triggered, the connection is logged as unresponsive, and the socket is closed
+
+## Sharing Files Through the Clipboard
+
+Files and directories that are copied on one computer can be pasted on another. Their contents are not part of the clipboard data. They are transferred when they are pasted, and only then.
+
+### The file list
+
+A clipboard that holds files carries one more format next to text, HTML and bitmap: `IClipboard::Format::FileList`, format number 3. A computer that does not know the format ignores it, as it does with every format number it does not know.
+
+The data of the format names what was copied, nothing more. All integers are big-endian.
+
+| Field | Size | Meaning |
+|---|---|---|
+| Magic | 4 bytes | `DFFL` |
+| Version | 1 byte | `1` |
+| List identifier | 8 bytes | Chosen by the computer that offers the files, quoted in every request |
+| Count | 4 bytes | Number of entries, 1 to 4096 |
+| Entries | variable | See below |
+
+Each entry is one file or directory that was copied. What a directory contains is not listed here, it is asked for later.
+
+| Field | Size | Meaning |
+|---|---|---|
+| Flags | 1 byte | Bit 0 is set for a directory |
+| Size | 8 bytes | Size of the file in bytes, zero for a directory |
+| Modification time | 8 bytes | Seconds since the Unix epoch, zero if unknown |
+| Name length | 2 bytes | 1 to 1024 |
+| Name | variable | UTF-8, a single path component: no `/`, no NUL, not `.` or `..` |
+
+Paths of the computer that offers the files are never sent. A file is referred to by the list identifier, the index of an entry in the list and a path below that entry.
+
+### Reading the files
+
+The computer that pastes sends @ref kMsgDFileRequest to the computer the file list came from, either to list a directory or to read a file from an offset. The answer is a series of @ref kMsgDFileResponse messages with data, closed by one that marks the end or an error.
+
+File data is sent in pieces of at most 64 KiB and never more than the reader has made room for. The request states how many bytes the reader is ready to receive. With @ref kMsgDFileCredit the reader grants more as it uses up what it received. This keeps the amount of file data that is on its way small, so input events that share the connection are not held up behind it. @ref kMsgDFileCancel abandons a request.
+
+A request is refused with an error if file sharing is turned off, if the list is no longer offered, or if the path leads anywhere but to the copied files and what is inside the copied directories. Symbolic links are neither listed nor followed.
+
+### Compatibility
+
+These messages do not depend on the negotiated protocol version. A request is only ever sent to a computer that sent a file list, and an answer only to a computer that sent a request. A computer that does not implement them never sends a file list and so never receives one of these messages.
+
+When a server passes the clipboard of one client on to another client it leaves the file list out, because the request would have to be passed on as well, which is not implemented.
 
 ## Version Compatibility
 
@@ -497,6 +545,11 @@ For platform-specific implementation details, refer to:
 - **File Transfer** (v1.5+)
   - Drag-and-drop initiation
   - Chunked file transfer
+
+- **Files on the Clipboard**
+  - File list in the clipboard data (`IClipboard::Format::FileList`)
+  - Listing and reading on request (@ref kMsgDFileRequest, @ref kMsgDFileResponse)
+  - Flow control and cancellation (@ref kMsgDFileCredit, @ref kMsgDFileCancel)
   - Progress tracking
 
 - **Security Features**

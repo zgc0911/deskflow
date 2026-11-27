@@ -38,6 +38,8 @@ add_library(${lib_name} STATIC ${PLATFORM_CODE}
   Clipboard.h
   ClipboardChunk.cpp
   ClipboardChunk.h
+  ClipboardFileList.cpp
+  ClipboardFileList.h
   Computer.cpp
   Computer.h
   DeskflowException.cpp
@@ -45,6 +47,10 @@ add_library(${lib_name} STATIC ${PLATFORM_CODE}
   DisplayException.cpp
   DisplayException.h
   DisplayInvalidException.h
+  FileOfferRegistry.cpp
+  FileOfferRegistry.h
+  FileTransfer.cpp
+  FileTransfer.h
   IApp.h
   IClient.h
   IClipboard.cpp

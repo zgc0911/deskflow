@@ -238,5 +238,10 @@ enum class EventTypes : uint32_t
 
   /// Stop libei
   EISessionClosed,
+
+  /** This event carries a piece of file transfer work to the thread that runs the event queue.
+      The data is a deskflow::FileTransfer task.
+  */
+  FileTransferTask,
 };
 } // namespace deskflow

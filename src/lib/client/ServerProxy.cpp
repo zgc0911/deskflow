@@ -45,6 +45,12 @@ ServerProxy::ServerProxy(Client *client, deskflow::IStream *stream, IEventQueue 
   m_events->addHandler(EventTypes::ClipboardSending, this, [this](const auto &e) {
     ClipboardChunk::send(m_stream, e.getDataObject());
   });
+  // file data is sent in step with the connection draining
+  m_events->addHandler(EventTypes::StreamOutputFlushed, m_stream->getEventTarget(), [this](const auto &) {
+    if (m_fileTransfer != nullptr) {
+      m_fileTransfer->channelFlushed(this);
+    }
+  });
 
   // send heartbeat
   setKeepAliveRate(kKeepAliveRate);
@@ -54,7 +60,19 @@ ServerProxy::~ServerProxy()
 {
   setKeepAliveRate(-1.0);
   m_events->removeHandler(EventTypes::StreamInputReady, m_stream->getEventTarget());
+  m_events->removeHandler(EventTypes::StreamOutputFlushed, m_stream->getEventTarget());
   m_events->removeHandler(EventTypes::ClipboardSending, this);
+  if (m_fileTransfer != nullptr) {
+    m_fileTransfer->channelClosed(this);
+  }
+}
+
+void ServerProxy::setFileTransfer(deskflow::FileTransfer *fileTransfer)
+{
+  if (m_fileTransfer != nullptr && m_fileTransfer != fileTransfer) {
+    m_fileTransfer->channelClosed(this);
+  }
+  m_fileTransfer = fileTransfer;
 }
 
 void ServerProxy::resetKeepAliveAlarm()
@@ -308,6 +326,22 @@ ServerProxy::ConnectionResult ServerProxy::parseMessage(const uint8_t *code)
     setOptions();
   }
 
+  else if (memcmp(code, kMsgDFileResponse, 4) == 0) {
+    fileResponse();
+  }
+
+  else if (memcmp(code, kMsgDFileRequest, 4) == 0) {
+    fileRequest();
+  }
+
+  else if (memcmp(code, kMsgDFileCredit, 4) == 0) {
+    fileCredit();
+  }
+
+  else if (memcmp(code, kMsgDFileCancel, 4) == 0) {
+    fileCancel();
+  }
+
   else if (memcmp(code, kMsgCClose, 4) == 0) {
     // server wants us to hangup
     LOG_VERBOSE("recv close");
@@ -547,6 +581,7 @@ void ServerProxy::setClipboard()
     // forward
     Clipboard clipboard;
     clipboard.unmarshall(m_clipboardDataCached, 0);
+    acceptFileList(clipboard);
     m_client->setClipboard(id, &clipboard);
     m_clipboardDataCached.clear();
     m_clipboardDataCached.shrink_to_fit();
@@ -554,6 +589,101 @@ void ServerProxy::setClipboard()
     LOG_INFO("clipboard was updated");
   } else if (r == TransferState::Error) {
     requestDisconnect("invalid clipboard data from server");
+  }
+}
+
+void ServerProxy::acceptFileList(Clipboard &clipboard)
+{
+  if (!clipboard.open(0)) {
+    return;
+  }
+  if (clipboard.has(IClipboard::Format::FileList)) {
+    const std::string fileList = clipboard.get(IClipboard::Format::FileList);
+    if (m_fileTransfer == nullptr || !m_fileTransfer->acceptRemoteFiles(fileList, this)) {
+      clipboard.remove(IClipboard::Format::FileList);
+    }
+  }
+  clipboard.close();
+}
+
+void ServerProxy::sendFileRequest(uint32_t requestId, uint8_t kind, const std::string &arguments)
+{
+  LOG_VERBOSE("sending file request %u kind=%d", requestId, kind);
+  ProtocolUtil::writef(m_stream, kMsgDFileRequest, requestId, kind, &arguments);
+}
+
+void ServerProxy::sendFileResponse(uint32_t requestId, uint8_t mark, const std::string &content)
+{
+  LOG_VERBOSE("sending file response %u mark=%d size=%d", requestId, mark, static_cast<int>(content.size()));
+  ProtocolUtil::writef(m_stream, kMsgDFileResponse, requestId, mark, &content);
+}
+
+void ServerProxy::sendFileCredit(uint32_t requestId, uint32_t bytes)
+{
+  LOG_VERBOSE("sending file credit %u bytes=%u", requestId, bytes);
+  ProtocolUtil::writef(m_stream, kMsgDFileCredit, requestId, bytes);
+}
+
+void ServerProxy::sendFileCancel(uint32_t requestId)
+{
+  LOG_VERBOSE("sending file cancel %u", requestId);
+  ProtocolUtil::writef(m_stream, kMsgDFileCancel, requestId);
+}
+
+void ServerProxy::fileRequest()
+{
+  uint32_t requestId = 0;
+  uint8_t kind = 0;
+  std::string arguments;
+  if (!ProtocolUtil::readf(m_stream, kMsgDFileRequest + 4, &requestId, &kind, &arguments)) {
+    LOG_ERR("malformed file request from server");
+    return;
+  }
+  LOG_VERBOSE("recv file request %u kind=%d", requestId, kind);
+  if (m_fileTransfer != nullptr) {
+    m_fileTransfer->handleRequest(this, requestId, kind, arguments);
+  }
+}
+
+void ServerProxy::fileResponse()
+{
+  uint32_t requestId = 0;
+  uint8_t mark = 0;
+  std::string content;
+  if (!ProtocolUtil::readf(m_stream, kMsgDFileResponse + 4, &requestId, &mark, &content)) {
+    LOG_ERR("malformed file response from server");
+    return;
+  }
+  LOG_VERBOSE("recv file response %u mark=%d size=%d", requestId, mark, static_cast<int>(content.size()));
+  if (m_fileTransfer != nullptr) {
+    m_fileTransfer->handleResponse(this, requestId, mark, content);
+  }
+}
+
+void ServerProxy::fileCredit()
+{
+  uint32_t requestId = 0;
+  uint32_t bytes = 0;
+  if (!ProtocolUtil::readf(m_stream, kMsgDFileCredit + 4, &requestId, &bytes)) {
+    LOG_ERR("malformed file credit from server");
+    return;
+  }
+  LOG_VERBOSE("recv file credit %u bytes=%u", requestId, bytes);
+  if (m_fileTransfer != nullptr) {
+    m_fileTransfer->handleCredit(this, requestId, bytes);
+  }
+}
+
+void ServerProxy::fileCancel()
+{
+  uint32_t requestId = 0;
+  if (!ProtocolUtil::readf(m_stream, kMsgDFileCancel + 4, &requestId)) {
+    LOG_ERR("malformed file cancel from server");
+    return;
+  }
+  LOG_VERBOSE("recv file cancel %u", requestId);
+  if (m_fileTransfer != nullptr) {
+    m_fileTransfer->handleCancel(this, requestId);
   }
 }
 

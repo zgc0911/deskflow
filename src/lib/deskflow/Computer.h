@@ -13,6 +13,7 @@
 #include "deskflow/MouseTypes.h"
 #include "deskflow/OptionTypes.h"
 
+#include <memory>
 #include <string>
 
 class IClipboard;
@@ -20,6 +21,8 @@ class IPlatformComputer;
 class IEventQueue;
 
 namespace deskflow {
+
+class FileTransfer;
 
 //! Platform independent computer
 /*!
@@ -279,6 +282,12 @@ public:
     return m_computer;
   }
 
+  //! Get the object that shares the files on the clipboard with other computers
+  FileTransfer &fileTransfer() const
+  {
+    return *m_fileTransfer;
+  }
+
 protected:
   void enablePrimary();
   void enableSecondary();
@@ -311,6 +320,9 @@ private:
   bool m_fakeInput = false;
 
   IEventQueue *m_events = nullptr;
+
+  // shares the files on the clipboard, destroyed after the platform computer
+  std::unique_ptr<FileTransfer> m_fileTransfer;
 };
 
 } // namespace deskflow

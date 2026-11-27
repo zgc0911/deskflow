@@ -1098,6 +1098,109 @@ extern const char *const kMsgDDragInfo;
 /** @} */ // end of protocol_files group
 
 /**
+ * @defgroup protocol_clipboard_files Clipboard File Messages
+ * @brief Reading files that another computer has copied to its clipboard
+ *
+ * A clipboard that holds files carries a list of them in the clipboard
+ * format IClipboard::Format::FileList. The files themselves stay where they
+ * are until they are pasted. The computer that pastes then asks the computer
+ * that copied for directory listings and file contents with these messages.
+ *
+ * These messages are not tied to a protocol version. A computer only sends a
+ * request to a peer that sent it a file list, and only answers a peer that
+ * sent it a request, so a peer that does not know them never receives one.
+ *
+ * All integers inside the string parameters are big-endian.
+ * @{
+ */
+
+/**
+ * @brief Ask for a directory listing or for the contents of a file
+ *
+ * **Message Code**: `"DFRQ"`
+ * **Direction**: Primary ↔ Secondary
+ * **Format**: `"DFRQ%4i%1i%s"`
+ * **Parameters**:
+ * - `$1`: Request identifier (4 bytes), chosen by the sender of the request
+ * - `$2`: Kind (1 byte) - `1` lists a directory, `2` reads a file
+ * - `$3`: Arguments (string):
+ *   - File list identifier (8 bytes), from the file list on the clipboard
+ *   - Index of the top level entry in that file list (4 bytes)
+ *   - Length of the path (2 bytes) and the path below the top level entry,
+ *     UTF-8 with `/` between components, empty for the entry itself
+ *   - Offset to start reading at (8 bytes), zero for listings
+ *   - Number of bytes the sender is ready to receive (4 bytes), zero for
+ *     listings
+ *
+ * @see kMsgDFileResponse, kMsgDFileCredit, kMsgDFileCancel
+ */
+extern const char *const kMsgDFileRequest;
+
+/**
+ * @brief Answer to a kMsgDFileRequest
+ *
+ * **Message Code**: `"DFRS"`
+ * **Direction**: Primary ↔ Secondary
+ * **Format**: `"DFRS%4i%1i%s"`
+ * **Parameters**:
+ * - `$1`: Request identifier (4 bytes)
+ * - `$2`: Mark (1 byte) - `1` data, `2` end, `3` error
+ * - `$3`: Content (string), depends on the mark:
+ *   - data of a listing: any number of entries, each made of flags (1 byte,
+ *     bit 0 set for a directory), size (8 bytes), modification time in
+ *     seconds since the Unix epoch (8 bytes), length of the name (2 bytes)
+ *     and the name in UTF-8
+ *   - data of a file: the next bytes of the file, at most 64 KiB
+ *   - end of a listing: empty
+ *   - end of a file: number of bytes that were sent (8 bytes)
+ *   - error: error code (4 bytes) and a message in UTF-8
+ *
+ * A request is answered by any number of data messages followed by one end
+ * or error message. File data is only sent while the receiver has granted
+ * room for it.
+ *
+ * @see kMsgDFileRequest, kMsgDFileCredit
+ */
+extern const char *const kMsgDFileResponse;
+
+/**
+ * @brief Grant room for more file data
+ *
+ * **Message Code**: `"DFCR"`
+ * **Direction**: Primary ↔ Secondary
+ * **Format**: `"DFCR%4i%4i"`
+ * **Parameters**:
+ * - `$1`: Request identifier (4 bytes)
+ * - `$2`: Number of additional bytes the sender is ready to receive (4 bytes)
+ *
+ * Sent by the computer that reads a file once it has used up data it
+ * received. Keeps the amount of file data in flight small so that input
+ * events are not held up behind it.
+ *
+ * @see kMsgDFileRequest
+ */
+extern const char *const kMsgDFileCredit;
+
+/**
+ * @brief Abandon a request
+ *
+ * **Message Code**: `"DFCN"`
+ * **Direction**: Primary ↔ Secondary
+ * **Format**: `"DFCN%4i"`
+ * **Parameters**:
+ * - `$1`: Request identifier (4 bytes)
+ *
+ * Sent by the computer that made the request when it no longer wants the
+ * answer. Messages for the request that are already on their way are
+ * ignored.
+ *
+ * @see kMsgDFileRequest
+ */
+extern const char *const kMsgDFileCancel;
+
+/** @} */ // end of protocol_clipboard_files group
+
+/**
  * @defgroup protocol_system System Messages
  * @brief System-level notifications and synchronization
  * @{

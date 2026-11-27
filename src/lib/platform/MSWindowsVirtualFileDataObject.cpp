@@ -650,8 +650,8 @@ IFACEMETHODIMP MSWindowsVirtualFileDataObject::EnumFormatEtc(DWORD direction, IE
   formats.push_back({static_cast<CLIPFORMAT>(fileContentsFormat()), nullptr, DVASPECT_CONTENT, -1, TYMED_ISTREAM});
   {
     std::scoped_lock lock{m_mutex};
-    for (const auto &[format, data] : m_globalFormats) {
-      formats.push_back({static_cast<CLIPFORMAT>(format), nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL});
+    for (const auto &entry : m_globalFormats) {
+      formats.push_back({static_cast<CLIPFORMAT>(entry.first), nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL});
     }
   }
   return SHCreateStdEnumFmtEtc(static_cast<UINT>(formats.size()), formats.data(), enumerator);
