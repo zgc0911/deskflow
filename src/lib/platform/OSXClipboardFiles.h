@@ -8,6 +8,8 @@
 
 #include "deskflow/ClipboardFileList.h"
 
+class IClipboard;
+
 #include <memory>
 #include <string>
 #include <vector>
@@ -43,6 +45,9 @@ public:
   while they are put there, which the volume answers from \p list.
   */
   bool put(const deskflow::ClipboardFileList &list);
+
+  //! Put the files a clipboard of another computer holds on the pasteboard, false if it holds none
+  bool put(const IClipboard &clipboard);
 
   //! The files copied on this computer, those of other computers left out
   bool get(std::vector<std::string> &paths) const;

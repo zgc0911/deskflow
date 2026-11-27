@@ -22,6 +22,7 @@ private Q_SLOTS:
   void put_showsTheFilesAndWritesTheirPaths();
   void put_sameFilesAgain_writesNothing();
   void put_otherFiles_replaceThem();
+  void put_clipboardOfAnotherComputer_takesItsFiles();
   void put_volumeNotMounted_changesNothing();
   void put_namesThatCanNotBeShown_areLeftOut();
   void put_doesNotWaitForTheVolume();
@@ -29,6 +30,7 @@ private Q_SLOTS:
   void get_filesOfOtherComputers_areLeftOut();
   void holdsOwnWrite_untilSomethingElseIsCopied();
   void generalPasteboard_ownWriteIsNotACopy();
+  void manual_privacyProbe();
   void manual_finderPasteAndCopy();
 
 private:

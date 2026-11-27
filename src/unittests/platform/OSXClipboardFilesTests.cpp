@@ -8,6 +8,7 @@
 
 #include "../deskflow/FileTransferTestLink.h"
 
+#include "deskflow/Clipboard.h"
 #include "platform/OSXClipboard.h"
 #include "platform/OSXClipboardFiles.h"
 #include "platform/OSXPasteboardFiles.h"
@@ -50,9 +51,9 @@ std::string canonical(const QString &path)
 }
 
 //! The clipboard of a computer that pastes, linked to a computer that copies
-struct Clipboard
+struct PasteSide
 {
-  explicit Clipboard(const std::string &mountCommand = "/sbin/mount_nfs", bool generalPasteboard = false)
+  explicit PasteSide(const std::string &mountCommand = "/sbin/mount_nfs", bool generalPasteboard = false)
       : base(std::make_unique<QTemporaryDir>())
   {
     OSXRemoteFileVolume::Options options;
@@ -69,7 +70,7 @@ struct Clipboard
     files = std::make_unique<OSXClipboardFiles>(std::move(ownPasteboard), std::move(ownVolume));
   }
 
-  ~Clipboard()
+  ~PasteSide()
   {
     link.release();
     files.reset();
@@ -133,7 +134,7 @@ void OSXClipboardFilesTests::cleanupTestCase()
 
 void OSXClipboardFilesTests::put_showsTheFilesAndWritesTheirPaths()
 {
-  Clipboard clipboard;
+  PasteSide clipboard;
   QVERIFY(clipboard.mounted);
   const ClipboardFileList list = clipboard.copy({sourcePath("a.txt"), sourcePath(QStringLiteral("文件夹"))});
   QCOMPARE(list.entries.size(), size_t{2});
@@ -155,7 +156,7 @@ void OSXClipboardFilesTests::put_showsTheFilesAndWritesTheirPaths()
 
 void OSXClipboardFilesTests::put_sameFilesAgain_writesNothing()
 {
-  Clipboard clipboard;
+  PasteSide clipboard;
   QVERIFY(clipboard.mounted);
   const ClipboardFileList list = clipboard.copy({sourcePath("a.txt")});
   QVERIFY(clipboard.files->put(list));
@@ -175,7 +176,7 @@ void OSXClipboardFilesTests::put_sameFilesAgain_writesNothing()
 
 void OSXClipboardFilesTests::put_otherFiles_replaceThem()
 {
-  Clipboard clipboard;
+  PasteSide clipboard;
   QVERIFY(clipboard.mounted);
   QVERIFY(clipboard.files->put(clipboard.copy({sourcePath("a.txt")})));
   const auto first = clipboard.onPasteboard();
@@ -186,9 +187,41 @@ void OSXClipboardFilesTests::put_otherFiles_replaceThem()
   QCOMPARE(contentsOf(second[0]), QByteArray("second"));
 }
 
+void OSXClipboardFilesTests::put_clipboardOfAnotherComputer_takesItsFiles()
+{
+  PasteSide clipboard;
+  QVERIFY(clipboard.mounted);
+  const ClipboardFileList list = clipboard.copy({sourcePath("a.txt"), sourcePath("b.txt")});
+
+  // as it arrives from the other computer: text next to the files
+  ::Clipboard received;
+  QVERIFY(received.open(1));
+  received.add(IClipboard::Format::Text, "a.txt\nb.txt");
+  received.add(IClipboard::Format::FileList, list.marshall());
+  received.close();
+  QVERIFY(clipboard.files->put(received));
+  QCOMPARE(clipboard.onPasteboard().size(), size_t{2});
+  QVERIFY(clipboard.files->holdsOwnWrite());
+
+  // text alone, or a list that makes no sense, leaves the rest to the other formats
+  clipboard.pasteboard->writeText("what the user copied");
+  const long count = clipboard.pasteboard->changeCount();
+  ::Clipboard textOnly;
+  QVERIFY(textOnly.open(2));
+  textOnly.add(IClipboard::Format::Text, "only text");
+  textOnly.close();
+  QVERIFY(!clipboard.files->put(textOnly));
+  ::Clipboard broken;
+  QVERIFY(broken.open(3));
+  broken.add(IClipboard::Format::FileList, "DFFL\x01 not a list");
+  broken.close();
+  QVERIFY(!clipboard.files->put(broken));
+  QCOMPARE(clipboard.pasteboard->changeCount(), count);
+}
+
 void OSXClipboardFilesTests::put_volumeNotMounted_changesNothing()
 {
-  Clipboard clipboard("/nonexistent/mount_nfs");
+  PasteSide clipboard("/nonexistent/mount_nfs");
   QVERIFY(!clipboard.mounted);
   clipboard.pasteboard->writeText("what the user copied");
   const long count = clipboard.pasteboard->changeCount();
@@ -200,7 +233,7 @@ void OSXClipboardFilesTests::put_volumeNotMounted_changesNothing()
 
 void OSXClipboardFilesTests::put_namesThatCanNotBeShown_areLeftOut()
 {
-  Clipboard clipboard;
+  PasteSide clipboard;
   QVERIFY(clipboard.mounted);
   std::string tooLong;
   for (int i = 0; i < 100; ++i) {
@@ -226,7 +259,7 @@ void OSXClipboardFilesTests::put_namesThatCanNotBeShown_areLeftOut()
 
 void OSXClipboardFilesTests::put_doesNotWaitForTheVolume()
 {
-  Clipboard clipboard;
+  PasteSide clipboard;
   QVERIFY(clipboard.mounted);
   const ClipboardFileList list = clipboard.copy({sourcePath("a.txt"), sourcePath(QStringLiteral("文件夹"))});
 
@@ -245,7 +278,7 @@ void OSXClipboardFilesTests::put_doesNotWaitForTheVolume()
 
 void OSXClipboardFilesTests::get_filesCopiedLikeFinderDoes_areFound()
 {
-  Clipboard clipboard;
+  PasteSide clipboard;
   // Finder refers to the files by their number on the volume
   clipboard.pasteboard->writeFileReferences(
       {sourcePath("a.txt").toStdString(), sourcePath(QStringLiteral("文件夹")).toStdString()}
@@ -264,7 +297,7 @@ void OSXClipboardFilesTests::get_filesCopiedLikeFinderDoes_areFound()
 
 void OSXClipboardFilesTests::get_filesOfOtherComputers_areLeftOut()
 {
-  Clipboard clipboard;
+  PasteSide clipboard;
   QVERIFY(clipboard.mounted);
   QVERIFY(clipboard.files->put(clipboard.copy({sourcePath("a.txt")})));
   const std::string shown = clipboard.onPasteboard().at(0);
@@ -286,7 +319,7 @@ void OSXClipboardFilesTests::get_filesOfOtherComputers_areLeftOut()
 
 void OSXClipboardFilesTests::holdsOwnWrite_untilSomethingElseIsCopied()
 {
-  Clipboard clipboard;
+  PasteSide clipboard;
   QVERIFY(clipboard.mounted);
   QVERIFY(!clipboard.files->holdsOwnWrite());
   QVERIFY(clipboard.files->put(clipboard.copy({sourcePath("a.txt")})));
@@ -332,6 +365,49 @@ void OSXClipboardFilesTests::generalPasteboard_ownWriteIsNotACopy()
   }
 }
 
+void OSXClipboardFilesTests::manual_privacyProbe()
+{
+  // run as an app of its own, to see what the privacy protection of the system asks for
+  if (qEnvironmentVariableIntValue("DESKFLOW_TEST_PRIVACY_PROBE") != 1) {
+    QSKIP("set DESKFLOW_TEST_PRIVACY_PROBE=1 and run the test as an app of its own");
+  }
+  QElapsedTimer timer;
+
+  // files of another computer on the volume, put on a pasteboard: the system looks at them
+  PasteSide clipboard;
+  QVERIFY(clipboard.mounted);
+  const ClipboardFileList list = clipboard.copy({sourcePath("a.txt"), sourcePath(QStringLiteral("文件夹"))});
+  timer.start();
+  const bool put = clipboard.files->put(list);
+  qInfo("PROBE put on the volume: %s in %lld ms", put ? "ok" : "failed", timer.elapsed());
+  const std::string shown = clipboard.onPasteboard().empty() ? "" : clipboard.onPasteboard().front();
+  timer.restart();
+  const QByteArray contents = contentsOf(shown);
+  qInfo("PROBE read from the volume: \"%s\" in %lld ms", contents.constData(), timer.elapsed());
+
+  // a file the user copied on the desktop, looked at the way a list is made of it
+  const QString desktop = qEnvironmentVariable("DESKFLOW_TEST_PRIVACY_PROBE_FILE");
+  if (!desktop.isEmpty()) {
+    timer.restart();
+    const QFileInfo info(desktop);
+    const bool exists = info.exists();
+    const QString canonicalPath = info.canonicalFilePath();
+    const qint64 size = info.size();
+    qInfo(
+        "PROBE look at %s: exists %d, canonical %d, size %lld in %lld ms", qPrintable(desktop), exists ? 1 : 0,
+        canonicalPath.isEmpty() ? 0 : 1, size, timer.elapsed()
+    );
+    timer.restart();
+    QFile file(desktop);
+    const bool opened = file.open(QIODevice::ReadOnly);
+    const QByteArray read = opened ? file.readAll() : QByteArray();
+    qInfo(
+        "PROBE read %s: opened %d, %lld bytes in %lld ms", qPrintable(desktop), opened ? 1 : 0, read.size(),
+        timer.elapsed()
+    );
+  }
+}
+
 void OSXClipboardFilesTests::manual_finderPasteAndCopy()
 {
   // a person pastes in Finder and copies there, only when asked to
@@ -359,7 +435,7 @@ void OSXClipboardFilesTests::manual_finderPasteAndCopy()
   OSXClipboard carbon;
   const std::string savedText = carbon.has(IClipboard::Format::Text) ? carbon.get(IClipboard::Format::Text) : "";
 
-  Clipboard clipboard("/sbin/mount_nfs", true);
+  PasteSide clipboard("/sbin/mount_nfs", true);
   QVERIFY(clipboard.mounted);
   QVERIFY(clipboard.files->put(clipboard.copy({folder.path(), single})));
   QProcess::startDetached("/usr/bin/open", {pasteInto});

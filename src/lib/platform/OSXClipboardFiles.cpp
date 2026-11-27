@@ -7,6 +7,7 @@
 #include "platform/OSXClipboardFiles.h"
 
 #include "base/Log.h"
+#include "deskflow/IClipboard.h"
 #include "platform/OSXPasteboardFiles.h"
 #include "platform/OSXRemoteFileVolume.h"
 
@@ -61,6 +62,19 @@ bool OSXClipboardFiles::put(const deskflow::ClipboardFileList &list)
   m_written = paths;
   LOG_DEBUG("put %d files copied on the other computer on the pasteboard", static_cast<int>(paths.size()));
   return true;
+}
+
+bool OSXClipboardFiles::put(const IClipboard &clipboard)
+{
+  std::string data;
+  if (clipboard.open(clipboard.getTime())) {
+    if (clipboard.has(IClipboard::Format::FileList)) {
+      data = clipboard.get(IClipboard::Format::FileList);
+    }
+    clipboard.close();
+  }
+  deskflow::ClipboardFileList list;
+  return !data.empty() && deskflow::ClipboardFileList::unmarshall(data, list) && put(list);
 }
 
 bool OSXClipboardFiles::get(std::vector<std::string> &paths) const

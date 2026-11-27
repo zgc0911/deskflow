@@ -849,18 +849,7 @@ bool OSXComputer::setClipboard(ClipboardID, const IClipboard *src)
 
 bool OSXComputer::setClipboardFiles(const IClipboard *src)
 {
-  if (m_clipboardFiles == nullptr) {
-    return false;
-  }
-  std::string data;
-  if (src->open(src->getTime())) {
-    if (src->has(IClipboard::Format::FileList)) {
-      data = src->get(IClipboard::Format::FileList);
-    }
-    src->close();
-  }
-  deskflow::ClipboardFileList list;
-  if (data.empty() || !deskflow::ClipboardFileList::unmarshall(data, list) || !m_clipboardFiles->put(list)) {
+  if (m_clipboardFiles == nullptr || !m_clipboardFiles->put(*src)) {
     return false;
   }
   // done by this process: the next check must not take it for something the user copied
