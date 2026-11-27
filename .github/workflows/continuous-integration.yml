@@ -88,6 +88,9 @@ jobs:
       contents: write
     container: ${{ matrix.target.container }}
     timeout-minutes: ${{ matrix.target.timeout }}
+    env:
+      # Without the certificate, as in a fork, macOS builds get an ad-hoc signature and are not notarized.
+      APPLE_CODESIGN_AVAILABLE: ${{ secrets.APPLE_CODESIGN_P12 != '' }}
     strategy:
       # Normally, we want to fail fast, but in this case we shouldn't since one target may
       # fail due to transient issues unrelated to the build.
@@ -276,7 +279,7 @@ jobs:
         run: ${{env.CMAKE_CONFIGURE}} ${{ matrix.target.config-args }} ${{ steps.get-deps.outputs.vcpkg-cmake-config }} -DPACKAGE_VERSION_LABEL="${{env.DESKFLOW_PACKAGE_VERSION}}"
 
       - name: Import code-signing certificate
-        if: runner.os == 'macOS' && ((github.ref == 'refs/heads/master') || (contains(github.ref, '/tags/v')))
+        if: runner.os == 'macOS' && env.APPLE_CODESIGN_AVAILABLE == 'true' && ((github.ref == 'refs/heads/master') || (contains(github.ref, '/tags/v')))
         uses: ./.github/actions/codesign-keychain
         with:
           action: import
@@ -320,7 +323,7 @@ jobs:
           fi
 
       - name: Notarize (macOS)
-        if: runner.os == 'macOS' && ((github.ref == 'refs/heads/master') || (contains(github.ref, '/tags/v')))
+        if: runner.os == 'macOS' && env.APPLE_CODESIGN_AVAILABLE == 'true' && ((github.ref == 'refs/heads/master') || (contains(github.ref, '/tags/v')))
         shell: bash
         env:
           APPLE_NOTARIZE_ID: ${{ secrets.APPLE_NOTARIZE_ID }}
@@ -342,7 +345,7 @@ jobs:
           xcrun stapler staple build/deskflow[-_]*.dmg
 
       - name: Clean up keychain
-        if: always() && runner.os == 'macOS' && ((github.ref == 'refs/heads/master') || (contains(github.ref, '/tags/v')))
+        if: always() && runner.os == 'macOS' && env.APPLE_CODESIGN_AVAILABLE == 'true' && ((github.ref == 'refs/heads/master') || (contains(github.ref, '/tags/v')))
         uses: ./.github/actions/codesign-keychain
         with:
           action: cleanup
@@ -466,7 +469,8 @@ jobs:
 
   release:
     needs: ci-passed
-    if: (github.ref == 'refs/heads/master') || (contains(github.ref, '/tags/v'))
+    # Releases are made by the project itself, a fork keeps its packages with the run that built them.
+    if: github.repository == 'deskflow/deskflow' && ((github.ref == 'refs/heads/master') || (contains(github.ref, '/tags/v')))
     runs-on: ubuntu-latest
 
     steps:
