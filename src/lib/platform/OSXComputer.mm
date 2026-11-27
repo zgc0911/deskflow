@@ -20,17 +20,22 @@
 #include "common/Settings.h"
 #include "deskflow/ClientApp.h"
 #include "deskflow/Clipboard.h"
+#include "deskflow/ClipboardFileList.h"
 #include "deskflow/DisplayInvalidException.h"
+#include "deskflow/FileTransfer.h"
 #include "deskflow/KeyMap.h"
 #include "mt/CondVar.h"
 #include "mt/Lock.h"
 #include "mt/Mutex.h"
 #include "mt/Thread.h"
 #include "platform/OSXClipboard.h"
+#include "platform/OSXClipboardFiles.h"
 #include "platform/OSXEventQueueBuffer.h"
 #include "platform/OSXKeyState.h"
 #include "platform/OSXMediaKeySupport.h"
+#include "platform/OSXPasteboardFiles.h"
 #include "platform/OSXPasteboardPeeker.h"
+#include "platform/OSXRemoteFileVolume.h"
 #include "platform/OSXScreenSaver.h"
 
 #include <AppKit/NSEvent.h>
@@ -835,17 +840,64 @@ void OSXComputer::leave()
 
 bool OSXComputer::setClipboard(ClipboardID, const IClipboard *src)
 {
-  if (src != nullptr) {
+  if (src != nullptr && !setClipboardFiles(src)) {
     LOG_DEBUG("setting clipboard");
     Clipboard::copy(&m_pasteboard, src);
   }
   return true;
 }
 
+bool OSXComputer::setClipboardFiles(const IClipboard *src)
+{
+  if (m_clipboardFiles == nullptr) {
+    return false;
+  }
+  std::string data;
+  if (src->open(src->getTime())) {
+    if (src->has(IClipboard::Format::FileList)) {
+      data = src->get(IClipboard::Format::FileList);
+    }
+    src->close();
+  }
+  deskflow::ClipboardFileList list;
+  if (data.empty() || !deskflow::ClipboardFileList::unmarshall(data, list) || !m_clipboardFiles->put(list)) {
+    return false;
+  }
+  // done by this process: the next check must not take it for something the user copied
+  m_pasteboard.synchronize();
+  return true;
+}
+
+bool OSXComputer::getClipboardFiles(ClipboardID, std::vector<std::string> &paths) const
+{
+  // the same for both clipboards, there is one pasteboard
+  paths.clear();
+  return m_clipboardFiles != nullptr && m_clipboardFiles->get(paths);
+}
+
+void OSXComputer::setFileTransfer(deskflow::FileTransfer *fileTransfer)
+{
+  // the volume reads from the transfer, it goes first
+  m_clipboardFiles.reset();
+  if (fileTransfer != nullptr) {
+    deskflow::OSXRemoteFileVolume::Options options;
+    options.directory = deskflow::OSXRemoteFileVolume::defaultDirectory();
+    m_clipboardFiles = std::make_unique<OSXClipboardFiles>(
+        std::make_unique<OSXPasteboardFiles>(),
+        std::make_unique<deskflow::OSXRemoteFileVolume>(fileTransfer->remoteFiles(), options)
+    );
+  }
+}
+
 void OSXComputer::checkClipboards()
 {
   LOG_VERBOSE("checking clipboard");
   if (m_pasteboard.synchronize()) {
+    if (m_clipboardFiles != nullptr && m_clipboardFiles->holdsOwnWrite()) {
+      // the files of another computer that this process put there
+      LOG_DEBUG("clipboard holds what was received");
+      return;
+    }
     LOG_DEBUG("clipboard changed");
     sendClipboardEvent(EventTypes::ClipboardGrabbed, kClipboardClipboard);
     sendClipboardEvent(EventTypes::ClipboardGrabbed, kClipboardSelection);

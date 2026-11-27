@@ -84,6 +84,8 @@ elseif(APPLE)
     OSXClipboardAnyTextConverter.h
     OSXClipboardBMPConverter.cpp
     OSXClipboardBMPConverter.h
+    OSXClipboardFiles.cpp
+    OSXClipboardFiles.h
     OSXClipboardHTMLConverter.cpp
     OSXClipboardHTMLConverter.h
     OSXClipboardTextConverter.cpp
@@ -104,10 +106,18 @@ elseif(APPLE)
     OSXKeyState.h
     OSXMediaKeySupport.h
     OSXMediaKeySupport.m
+    OSXNfsServer.cpp
+    OSXNfsServer.h
+    OSXPasteboardFiles.h
+    OSXPasteboardFiles.mm
     OSXPasteboardPeeker.h
     OSXPasteboardPeeker.m
     OSXPowerManager.cpp
     OSXPowerManager.h
+    OSXRemoteFileSystem.cpp
+    OSXRemoteFileSystem.h
+    OSXRemoteFileVolume.cpp
+    OSXRemoteFileVolume.h
     OSXScreenSaver.cpp
     OSXScreenSaver.h
     OSXScreenSaverControl.h

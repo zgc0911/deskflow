@@ -22,6 +22,7 @@
 #include <bitset>
 #include <map>
 #include <memory>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -32,8 +33,13 @@ extern "C"
   int _CGSDefaultConnection();
 }
 
+namespace deskflow {
+class FileTransfer;
+} // namespace deskflow
+
 template <class T> class CondVar;
 class EventQueueTimer;
+class OSXClipboardFiles;
 class Mutex;
 class Thread;
 class OSXKeyState;
@@ -86,6 +92,8 @@ public:
   void leave() override;
   bool setClipboard(ClipboardID, const IClipboard *) override;
   void checkClipboards() override;
+  bool getClipboardFiles(ClipboardID id, std::vector<std::string> &paths) const override;
+  void setFileTransfer(deskflow::FileTransfer *fileTransfer) override;
   void openScreensaver(bool notify) override;
   void closeScreensaver() override;
   void screensaver(bool activate) override;
@@ -107,6 +115,9 @@ private:
   bool updateComputerShape();
   bool updateComputerShape(const CGDirectDisplayID, const CGDisplayChangeSummaryFlags);
   void postMouseEvent(CGPoint &) const;
+
+  //! Put the files of another computer on the pasteboard, false if the clipboard holds none that can be shown
+  bool setClipboardFiles(const IClipboard *src);
 
   // convenience function to send events
   void sendEvent(EventTypes type, void * = nullptr) const;
@@ -258,6 +269,8 @@ private:
   // clipboards
   OSXClipboard m_pasteboard;
   uint32_t m_sequenceNumber;
+  //! Copied files on the pasteboard, made when there is a file transfer to fetch them with
+  std::unique_ptr<OSXClipboardFiles> m_clipboardFiles;
 
   // screen saver stuff
   OSXScreenSaver *m_screensaver;

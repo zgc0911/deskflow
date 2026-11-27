@@ -31,6 +31,27 @@ elseif(APPLE)
     SOURCE OSXKeyStateTests.cpp
     WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/src/lib/platform"
   )
+  create_test(
+    NAME OSXRemoteFileSystemTests
+    DEPENDS platform
+    LIBS app arch base io net
+    SOURCE OSXRemoteFileSystemTests.cpp
+    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/src/lib/platform"
+  )
+  create_test(
+    NAME OSXClipboardFilesTests
+    DEPENDS platform
+    LIBS app arch base io net
+    SOURCE OSXClipboardFilesTests.cpp
+    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/src/lib/platform"
+  )
+  create_test(
+    NAME OSXRemoteFileVolumeTests
+    DEPENDS platform
+    LIBS app arch base io net
+    SOURCE OSXRemoteFileVolumeTests.cpp
+    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/src/lib/platform"
+  )
 elseif(UNIX)
   if(LIBEI_FOUND)
     create_test(

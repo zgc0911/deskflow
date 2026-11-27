@@ -95,6 +95,8 @@ Computer::~Computer()
     }
   }
 
+  // the platform code lets go of the transfer before either of them goes
+  m_computer->setFileTransfer(nullptr);
   delete m_computer;
   LOG_DEBUG("closed display");
 }

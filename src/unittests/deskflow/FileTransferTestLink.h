@@ -24,6 +24,8 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <deque>
 #include <functional>
 #include <future>
 #include <map>
@@ -208,6 +210,52 @@ public:
   void cut()
   {
     m_cut = true;
+    release();
+  }
+
+  ~LoopbackChannel() override
+  {
+    stopSlowDelivery();
+  }
+
+  //! End the thread that delivers slowly, what it still holds is dropped
+  void stopSlowDelivery()
+  {
+    {
+      std::scoped_lock lock{m_slowMutex};
+      m_slowStop = true;
+      m_holding = false;
+    }
+    m_slowChanged.notify_all();
+    if (m_slowThread.joinable()) {
+      m_slowThread.join();
+    }
+  }
+
+  //! Keep back what is sent from now on, like a connection that got stuck
+  void hold()
+  {
+    std::scoped_lock lock{m_slowMutex};
+    m_slow = true;
+    m_holding = true;
+  }
+
+  //! Deliver what was kept back, in order, and go on as before
+  void release()
+  {
+    {
+      std::scoped_lock lock{m_slowMutex};
+      m_holding = false;
+    }
+    m_slowChanged.notify_all();
+  }
+
+  //! Let every message with file data take this long, like a slow connection
+  void setDataDelay(int milliseconds)
+  {
+    std::scoped_lock lock{m_slowMutex};
+    m_slow = true;
+    m_dataDelayMs = milliseconds;
   }
 
   void sendFileRequest(uint32_t requestId, uint8_t kind, const std::string &arguments) override
@@ -223,10 +271,13 @@ public:
     } else if (mark == Protocol::MarkError) {
       m_answered->onError(requestId, content);
     }
-    deliver([this, requestId, mark, content] {
-      std::string received = content;
-      m_peer->handleResponse(m_peerChannel, requestId, mark, received);
-    });
+    deliver(
+        [this, requestId, mark, content] {
+          std::string received = content;
+          m_peer->handleResponse(m_peerChannel, requestId, mark, received);
+        },
+        mark == Protocol::MarkData
+    );
   }
 
   void sendFileCredit(uint32_t requestId, uint32_t bytes) override
@@ -244,11 +295,29 @@ public:
   std::atomic<int> cancels = 0;
 
 private:
-  void deliver(std::function<void()> message)
+  void deliver(std::function<void()> message, bool isData = false)
   {
     if (m_cut || m_peerChannel->m_cut) {
       return;
     }
+
+    // a connection that was made slow or was held hands its messages to a thread that takes its time
+    std::unique_lock lock{m_slowMutex};
+    if (m_slow) {
+      m_slowQueue.emplace_back(std::move(message), isData);
+      if (!m_slowThread.joinable()) {
+        m_slowThread = std::thread([this] { deliverSlowly(); });
+      }
+      lock.unlock();
+      m_slowChanged.notify_all();
+      return;
+    }
+    lock.unlock();
+    post(std::move(message));
+  }
+
+  void post(std::function<void()> message)
+  {
     m_loop.post([this, message = std::move(message)] {
       if (!m_cut && !m_peerChannel->m_cut) {
         message();
@@ -260,6 +329,37 @@ private:
       }
     });
   }
+
+  void deliverSlowly()
+  {
+    std::unique_lock lock{m_slowMutex};
+    for (;;) {
+      m_slowChanged.wait(lock, [this] { return m_slowStop || (!m_holding && !m_slowQueue.empty()); });
+      if (m_slowStop) {
+        return;
+      }
+      auto [message, isData] = std::move(m_slowQueue.front());
+      m_slowQueue.pop_front();
+      const int delay = isData ? m_dataDelayMs : 0;
+      lock.unlock();
+      if (delay > 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(delay));
+      }
+      if (!m_cut) {
+        post(std::move(message));
+      }
+      lock.lock();
+    }
+  }
+
+  std::mutex m_slowMutex;
+  std::condition_variable m_slowChanged;
+  std::deque<std::pair<std::function<void()>, bool>> m_slowQueue;
+  std::thread m_slowThread;
+  bool m_slow = false;
+  bool m_holding = false;
+  bool m_slowStop = false;
+  int m_dataDelayMs = 0;
 
   EventLoop &m_loop;
   FileTransfer *m_local = nullptr;
@@ -299,6 +399,10 @@ struct Link
       a.reset();
       b.reset();
     });
+    // the channels are referred to by events they posted, let those run before the channels go
+    aToB.stopSlowDelivery();
+    bToA.stopSlowDelivery();
+    loop.call([] {});
   }
 
   //! A copies \p paths and B learns about it, like when the clipboard is sent over
@@ -322,6 +426,19 @@ struct Link
     }
     const bool accepted = loop.call([&] { return a->acceptRemoteFiles(fileList, &aToB); });
     return accepted ? list : ClipboardFileList{};
+  }
+
+  //! Nothing gets through in either direction until release() is called
+  void hold()
+  {
+    aToB.hold();
+    bToA.hold();
+  }
+
+  void release()
+  {
+    aToB.release();
+    bToA.release();
   }
 
   //! Wait until A answers no more requests, false if that takes too long

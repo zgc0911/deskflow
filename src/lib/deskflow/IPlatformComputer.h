@@ -89,7 +89,10 @@ public:
   the system clipboard indicated by \c id to \c paths.  Returns false if
   the clipboard holds no files or the platform does not support sharing
   them.  Files that were put on the clipboard by setClipboard() on behalf
-  of another computer are not reported.
+  of another computer are not reported.  Where both clipboards are the same
+  system clipboard the answer must not depend on \c id: the files are
+  offered for each clipboard, and no files for one of them withdraws them.
+  Must not look at files on a volume that may not answer.
   */
   virtual bool getClipboardFiles(ClipboardID id, std::vector<std::string> &paths) const
   {
@@ -100,10 +103,10 @@ public:
 
   //! Give access to the files offered by other computers
   /*!
-  Called once, before the computer is enabled.  A platform that can paste
-  files from other computers keeps \c fileTransfer and uses it when
-  setClipboard() is given a clipboard with IClipboard::Format::FileList.
-  The object outlives the platform computer.
+  Called before the computer is enabled, and with nullptr before the
+  transfer goes away: the platform must let go of it then. A platform that
+  can paste files from other computers uses it when setClipboard() is given
+  a clipboard with IClipboard::Format::FileList.
   */
   virtual void setFileTransfer(deskflow::FileTransfer *fileTransfer)
   {
