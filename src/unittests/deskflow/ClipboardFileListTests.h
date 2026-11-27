@@ -19,6 +19,8 @@ private Q_SLOTS:
   void unmarshall_wrongHeader_rejected();
   void unmarshall_wrongCount_rejected();
   void unmarshall_invalidName_rejected();
+  void unmarshall_missingEntry_rejected();
+  void entries_keepTheMissingMark();
   void isValidName_data();
   void isValidName();
   void wire_roundTrip();

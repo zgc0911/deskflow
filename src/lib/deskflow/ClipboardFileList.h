@@ -24,6 +24,8 @@ struct ClipboardFileEntry
   uint64_t size = 0;
   //! Seconds since the Unix epoch, zero when unknown
   int64_t modifiedTime = 0;
+  //! Was copied but is gone now. Only in answers that tell what became of the copied entries, never in a list.
+  bool isMissing = false;
 
   bool operator==(const ClipboardFileEntry &) const = default;
 };

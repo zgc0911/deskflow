@@ -175,6 +175,18 @@ bool FileOfferRegistry::isOffered(uint64_t offerId)
   return find(offerId) != nullptr;
 }
 
+bool FileOfferRegistry::roots(uint64_t offerId, QStringList &roots)
+{
+  roots.clear();
+  Offer *offer = find(offerId);
+  if (offer == nullptr) {
+    return false;
+  }
+  offer->lastUsedMs = m_clock();
+  roots = offer->roots;
+  return true;
+}
+
 bool FileOfferRegistry::isValidPathComponent(std::string_view component)
 {
   if (!ClipboardFileList::isValidName(component)) {

@@ -361,6 +361,11 @@ FileTransferStatus RemoteFiles::listDirectory(
   return FileTransferStatus::Ok;
 }
 
+FileTransferStatus RemoteFiles::listOffer(uint64_t offerId, std::vector<ClipboardFileEntry> &entries)
+{
+  return listDirectory(offerId, FileTransfer::Protocol::AllItems, {}, entries);
+}
+
 std::unique_ptr<RemoteFileReader> RemoteFiles::openFile(
     uint64_t offerId, uint32_t item, const std::string &relativePath, uint64_t offset, uint32_t window
 )
@@ -401,6 +406,10 @@ struct FileTransfer::ServedIo
 {
   QFile file;
   std::unique_ptr<QDirIterator> listing;
+  //! Set when the copied entries themselves are listed, not what is in a directory
+  bool listsRoots = false;
+  QStringList roots;
+  qsizetype nextRoot = 0;
 };
 
 //! What the worker thread hands back for one step of a request
@@ -691,6 +700,20 @@ void FileTransfer::handleRequest(
   const std::string relativePath(pathView);
   runJob(key, serial, [this, io, kind, offerId, item, relativePath, offset] {
     IoResult result;
+    if (kind == Protocol::RequestList && item == Protocol::AllItems) {
+      // what was copied, as it is now
+      if (!relativePath.empty()) {
+        return IoResult{false, Error::BadPath, "not one of the offered files"};
+      }
+      std::scoped_lock lock{m_registryMutex};
+      if (!m_registry.roots(offerId, io->roots)) {
+        return IoResult{false, Error::UnknownOffer, "these files are no longer offered"};
+      }
+      io->listsRoots = true;
+      result.end = io->roots.isEmpty();
+      return result;
+    }
+
     QString localPath;
     FileOfferRegistry::Resolved resolved;
     {
@@ -854,6 +877,28 @@ bool FileTransfer::pumpServed(const ServedKey &key, Served &served)
     runJob(key, served.serial, [io] {
       IoResult result;
       int count = 0;
+      if (io->listsRoots) {
+        while (io->nextRoot < io->roots.size() && count < kEntriesPerMessage &&
+               result.content.size() < kListingBytesPerMessage) {
+          // every entry is answered for, the other computer tells them apart by their position
+          const QFileInfo info(io->roots.at(io->nextRoot));
+          ++io->nextRoot;
+          ClipboardFileEntry entry;
+          entry.name = info.fileName().toStdString();
+          if (isLink(info) || (!info.isFile() && !info.isDir())) {
+            entry.isMissing = true;
+          } else {
+            entry.isDirectory = info.isDir();
+            entry.size = entry.isDirectory ? 0 : static_cast<uint64_t>(info.size());
+            entry.modifiedTime = info.lastModified().toSecsSinceEpoch();
+          }
+          ClipboardFileList::appendEntry(result.content, entry);
+          ++count;
+        }
+        result.end = io->nextRoot >= io->roots.size();
+        return result;
+      }
+
       while (io->listing->hasNext() && count < kEntriesPerMessage && result.content.size() < kListingBytesPerMessage) {
         const QFileInfo info = io->listing->nextFileInfo();
         if (isLink(info) || (!info.isFile() && !info.isDir())) {

@@ -111,6 +111,14 @@ public:
       uint64_t offerId, uint32_t item, const std::string &relativePath, std::vector<ClipboardFileEntry> &entries
   );
 
+  //! Ask what became of the files and directories that were copied
+  /*!
+  Blocks until the answer is complete. \p entries are the top level entries
+  of the list \p offerId, in the order of the list and as they are now: a
+  copied file may have changed since, or it may be gone, which is marked.
+  */
+  FileTransferStatus listOffer(uint64_t offerId, std::vector<ClipboardFileEntry> &entries);
+
   //! Open a file on the other computer for reading
   /*!
   Never returns nullptr, a failure is reported by the first read. \p window
@@ -146,6 +154,8 @@ public:
   {
     inline static const uint8_t RequestList = 1;
     inline static const uint8_t RequestRead = 2;
+    //! Instead of the index of an entry in a request to list: the entries of the list themselves
+    inline static const uint32_t AllItems = 0xffffffff;
     inline static const uint8_t MarkData = 1;
     inline static const uint8_t MarkEnd = 2;
     inline static const uint8_t MarkError = 3;

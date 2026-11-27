@@ -61,6 +61,11 @@ void FileOfferRegistryTests::initTestCase()
   m_haveLinks = QFile::link(path("secret"), path("copied/dir/way-out")) &&
                 QFile::link(path("copied/a.txt"), path("copied/link-to-a")) &&
                 QFileInfo(path("copied/dir/way-out")).isSymbolicLink();
+  if (!m_haveLinks) {
+    // what Windows makes instead are shortcuts, ordinary files that have no place in these tests
+    QFile::remove(path("copied/dir/way-out"));
+    QFile::remove(path("copied/link-to-a"));
+  }
 }
 
 void FileOfferRegistryTests::offer_listsTopLevelEntries()

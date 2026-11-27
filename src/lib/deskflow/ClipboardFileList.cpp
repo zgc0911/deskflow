@@ -6,6 +6,8 @@
 
 #include "deskflow/ClipboardFileList.h"
 
+#include <algorithm>
+
 namespace deskflow {
 
 namespace {
@@ -13,6 +15,7 @@ namespace {
 const std::string_view kMagic = "DFFL";
 const uint8_t kVersion = 1;
 const uint8_t kFlagDirectory = 0x01;
+const uint8_t kFlagMissing = 0x02;
 
 } // namespace
 
@@ -138,6 +141,10 @@ bool ClipboardFileList::unmarshall(std::string_view data, ClipboardFileList &lis
   if (!readEntries(data, entries) || entries.size() != count) {
     return false;
   }
+  // a list names what was copied, there is no such thing as a missing entry in it
+  if (std::any_of(entries.begin(), entries.end(), [](const ClipboardFileEntry &entry) { return entry.isMissing; })) {
+    return false;
+  }
 
   list.offerId = offerId;
   list.entries = std::move(entries);
@@ -157,7 +164,9 @@ bool ClipboardFileList::isValidName(std::string_view name)
 
 void ClipboardFileList::appendEntry(std::string &data, const ClipboardFileEntry &entry)
 {
-  wire::putU8(data, entry.isDirectory ? kFlagDirectory : uint8_t{0});
+  const uint8_t flags =
+      (entry.isDirectory ? kFlagDirectory : uint8_t{0}) | (entry.isMissing ? kFlagMissing : uint8_t{0});
+  wire::putU8(data, flags);
   wire::putU64(data, entry.size);
   wire::putU64(data, static_cast<uint64_t>(entry.modifiedTime));
   wire::putU16(data, static_cast<uint16_t>(entry.name.size()));
@@ -186,6 +195,7 @@ bool ClipboardFileList::readEntries(std::string_view data, std::vector<Clipboard
     ClipboardFileEntry entry;
     entry.name = std::string(name);
     entry.isDirectory = (flags & kFlagDirectory) != 0;
+    entry.isMissing = (flags & kFlagMissing) != 0;
     entry.size = entry.isDirectory ? 0 : size;
     entry.modifiedTime = static_cast<int64_t>(modifiedTime);
     entries.push_back(std::move(entry));

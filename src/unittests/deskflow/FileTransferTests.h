@@ -23,6 +23,7 @@ private Q_SLOTS:
   void read_fromOffset();
   void read_smallestWindow_completes();
   void list_largeDirectory();
+  void listOffer_tellsWhatBecameOfTheCopiedEntries();
   void list_skipsLinks();
   void request_outsideOfTheOffer_refused();
   void request_rawPathTricks_refused();

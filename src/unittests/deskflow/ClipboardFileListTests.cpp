@@ -136,6 +136,36 @@ void ClipboardFileListTests::unmarshall_invalidName_rejected()
   }
 }
 
+void ClipboardFileListTests::unmarshall_missingEntry_rejected()
+{
+  // only an answer about the copied entries may say that one is gone, a list never does
+  ClipboardFileList list;
+  list.offerId = 5;
+  list.entries.push_back({"good.txt", false, 1, 1});
+  list.entries.push_back({"gone.txt", false, 0, 0, true});
+
+  ClipboardFileList decoded;
+  QVERIFY(!ClipboardFileList::unmarshall(list.marshall(), decoded));
+  QVERIFY(decoded.entries.empty());
+}
+
+void ClipboardFileListTests::entries_keepTheMissingMark()
+{
+  std::string data;
+  ClipboardFileList::appendEntry(data, {"here.txt", false, 7, 1700000000});
+  ClipboardFileList::appendEntry(data, {"gone.txt", false, 0, 0, true});
+  ClipboardFileList::appendEntry(data, {"folder", true, 0, 1700000001});
+
+  std::vector<ClipboardFileEntry> entries;
+  QVERIFY(ClipboardFileList::readEntries(data, entries));
+  QCOMPARE(entries.size(), size_t{3});
+  QVERIFY(!entries[0].isMissing);
+  QVERIFY(entries[1].isMissing);
+  QCOMPARE(entries[1].name, std::string("gone.txt"));
+  QVERIFY(entries[2].isDirectory);
+  QVERIFY(!entries[2].isMissing);
+}
+
 void ClipboardFileListTests::isValidName_data()
 {
   QTest::addColumn<QByteArray>("name");

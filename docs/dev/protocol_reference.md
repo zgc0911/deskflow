@@ -305,7 +305,7 @@ Each entry is one file or directory that was copied. What a directory contains i
 
 | Field | Size | Meaning |
 |---|---|---|
-| Flags | 1 byte | Bit 0 is set for a directory |
+| Flags | 1 byte | Bit 0 is set for a directory. Bit 1 is never set in a file list, see below |
 | Size | 8 bytes | Size of the file in bytes, zero for a directory |
 | Modification time | 8 bytes | Seconds since the Unix epoch, zero if unknown |
 | Name length | 2 bytes | 1 to 1024 |
@@ -320,6 +320,8 @@ The computer that pastes sends @ref kMsgDFileRequest to the computer the file li
 File data is sent in pieces of at most 64 KiB and never more than the reader has made room for. The request states how many bytes the reader is ready to receive. With @ref kMsgDFileCredit the reader grants more as it uses up what it received. This keeps the amount of file data that is on its way small, so input events that share the connection are not held up behind it. @ref kMsgDFileCancel abandons a request.
 
 A request is refused with an error if file sharing is turned off, if the list is no longer offered, or if the path leads anywhere but to the copied files and what is inside the copied directories. Symbolic links are neither listed nor followed.
+
+Time passes between copying and pasting, and a copied file may be changed or deleted in between. A request to list that names the entry index `0xFFFFFFFF` and an empty path is answered with the entries of the file list themselves, in the order of the list and as they are at that moment. An entry that no longer exists has bit 1 of its flags set.
 
 ### Compatibility
 

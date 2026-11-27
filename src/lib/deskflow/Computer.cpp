@@ -402,12 +402,16 @@ void *Computer::getEventTarget() const
 bool Computer::getClipboard(ClipboardID id, IClipboard *clipboard) const
 {
   const bool result = m_computer->getClipboard(id, clipboard);
-  if (!result || id != kClipboardClipboard) {
+  if (!result) {
     return result;
   }
 
   // copied files are not part of what the platform clipboard hands over: other
-  // computers get a list of them and ask for the contents when they are pasted
+  // computers get a list of them and ask for the contents when they are pasted.
+  // where both clipboards are the same system clipboard they must offer the same
+  // files: the computer that pastes applies one after the other, and the second
+  // would take the files of the first away again. offering the same files twice
+  // results in the same list.
   std::vector<std::string> paths;
   std::string fileList;
   if (m_computer->getClipboardFiles(id, paths) && !paths.empty()) {

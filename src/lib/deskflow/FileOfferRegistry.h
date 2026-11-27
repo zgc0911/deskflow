@@ -74,6 +74,12 @@ public:
   */
   Resolved resolve(uint64_t offerId, uint32_t item, std::string_view relativePath, QString &localPath);
 
+  //! Get the local paths of the top level entries of a list, in the order of the list
+  /*!
+  Returns false if the list is not offered by this computer.
+  */
+  bool roots(uint64_t offerId, QStringList &roots);
+
   //! Replace the clock, for tests. The function returns milliseconds.
   void setClock(std::function<int64_t()> clock);
 
