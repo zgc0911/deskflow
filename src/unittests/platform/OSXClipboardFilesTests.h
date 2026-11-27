@@ -29,6 +29,7 @@ private Q_SLOTS:
   void get_filesOfOtherComputers_areLeftOut();
   void holdsOwnWrite_untilSomethingElseIsCopied();
   void generalPasteboard_ownWriteIsNotACopy();
+  void manual_finderPasteAndCopy();
 
 private:
   QString sourcePath(const QString &relative) const;

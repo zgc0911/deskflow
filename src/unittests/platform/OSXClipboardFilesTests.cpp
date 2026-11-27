@@ -14,6 +14,10 @@
 #include "platform/OSXRemoteFileVolume.h"
 
 #include <QElapsedTimer>
+#include <QProcess>
+
+#include <algorithm>
+#include <thread>
 
 #include <sys/mount.h>
 
@@ -48,13 +52,16 @@ std::string canonical(const QString &path)
 //! The clipboard of a computer that pastes, linked to a computer that copies
 struct Clipboard
 {
-  explicit Clipboard(const std::string &mountCommand = "/sbin/mount_nfs") : base(std::make_unique<QTemporaryDir>())
+  explicit Clipboard(const std::string &mountCommand = "/sbin/mount_nfs", bool generalPasteboard = false)
+      : base(std::make_unique<QTemporaryDir>())
   {
     OSXRemoteFileVolume::Options options;
     options.directory = QDir(base->path()).filePath("volumes").toStdString();
     options.mountCommand = mountCommand;
-    options.limits.waitMs = 2000;
-    auto ownPasteboard = std::make_unique<OSXPasteboardFiles>(true);
+    if (!generalPasteboard) {
+      options.limits.waitMs = 2000;
+    }
+    auto ownPasteboard = std::make_unique<OSXPasteboardFiles>(!generalPasteboard);
     pasteboard = ownPasteboard.get();
     auto ownVolume = std::make_unique<OSXRemoteFileVolume>(link.remoteOfB, options);
     volume = ownVolume.get();
@@ -322,6 +329,79 @@ void OSXClipboardFilesTests::generalPasteboard_ownWriteIsNotACopy()
     general.write(savedFiles, std::vector<bool>(savedFiles.size(), false));
   } else {
     other.writeText(savedText);
+  }
+}
+
+void OSXClipboardFilesTests::manual_finderPasteAndCopy()
+{
+  // a person pastes in Finder and copies there, only when asked to
+  if (qEnvironmentVariableIntValue("DESKFLOW_TEST_FINDER") != 1) {
+    QSKIP("set DESKFLOW_TEST_FINDER=1 to paste and copy in Finder by hand");
+  }
+
+  // what the other computer copied
+  QTemporaryDir source;
+  QVERIFY(source.isValid());
+  const QDir folder(QDir(source.path()).filePath(QStringLiteral("另一台电脑的文件夹")));
+  QVERIFY(QDir().mkpath(folder.filePath(QStringLiteral("嵌套/更深"))));
+  QVERIFY(writeFile(folder.filePath(QStringLiteral("小文件.txt")), "small"));
+  QVERIFY(writeFile(folder.filePath(QStringLiteral("嵌套/更深/c.txt")), "deep down"));
+  QVERIFY(writeFile(folder.filePath("empty.bin"), {}));
+  QVERIFY(writePattern(folder.filePath(QStringLiteral("大文件.bin")), 300 * kMiB, 31));
+  const QString single = QDir(source.path()).filePath(QStringLiteral("单个文件.txt"));
+  QVERIFY(writeFile(single, "a single file"));
+
+  QTemporaryDir target;
+  QVERIFY(target.isValid());
+  QVERIFY(QDir().mkpath(target.filePath(QStringLiteral("粘贴到这里"))));
+  const QString pasteInto = target.filePath(QStringLiteral("粘贴到这里"));
+
+  OSXClipboard carbon;
+  const std::string savedText = carbon.has(IClipboard::Format::Text) ? carbon.get(IClipboard::Format::Text) : "";
+
+  Clipboard clipboard("/sbin/mount_nfs", true);
+  QVERIFY(clipboard.mounted);
+  QVERIFY(clipboard.files->put(clipboard.copy({folder.path(), single})));
+  QProcess::startDetached("/usr/bin/open", {pasteInto});
+  qInfo("STEP 1: press Command-V in the Finder window that opened");
+
+  QMap<QString, QByteArray> expected;
+  describe(folder.path(), folder.dirName(), expected);
+  describe(single, QFileInfo(single).fileName(), expected);
+  QElapsedTimer timer;
+  timer.start();
+  QMap<QString, QByteArray> pasted;
+  for (;;) {
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    pasted.clear();
+    describe(QDir(pasteInto).filePath(folder.dirName()), folder.dirName(), pasted);
+    describe(QDir(pasteInto).filePath(QFileInfo(single).fileName()), QFileInfo(single).fileName(), pasted);
+    if (pasted == expected || timer.elapsed() > 300000) {
+      break;
+    }
+  }
+  qInfo(
+      "pasted after %lld s, %llu bytes fetched for %lld", timer.elapsed() / 1000,
+      static_cast<unsigned long long>(clipboard.volume->fileSystem().fetchedBytes()),
+      static_cast<long long>(300 * kMiB + 5 + 9 + 13)
+  );
+  QCOMPARE(pasted, expected);
+
+  qInfo("STEP 2: click a pasted file or folder in the window and press Command-C");
+  const std::string pastedHere = canonical(pasteInto) + "/";
+  std::vector<std::string> paths;
+  timer.restart();
+  while (timer.elapsed() < 180000) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    if (!clipboard.files->holdsOwnWrite() && clipboard.files->get(paths)) {
+      break;
+    }
+  }
+  qInfo("copied in Finder: %s", paths.empty() ? "nothing" : paths.front().c_str());
+  OSXPasteboardFiles(false).writeText(savedText);
+  QVERIFY(!paths.empty());
+  for (const auto &path : paths) {
+    QVERIFY2(path.rfind(pastedHere, 0) == 0, path.c_str());
   }
 }
 
