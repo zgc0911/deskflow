@@ -72,6 +72,13 @@ bool waitFor(const std::function<bool()> &condition, int timeoutMs)
   return true;
 }
 
+//! Wait for the clipboard thread while handling messages: it may send one to this thread, such as
+//! WM_DESTROYCLIPBOARD when a window of this thread owned the clipboard before
+bool finished(const MSWindowsClipboardFiles &clipboard)
+{
+  return waitFor([&clipboard] { return clipboard.waitUntilDone(0); }, 5000);
+}
+
 bool openClipboard()
 {
   return waitFor([] { return OpenClipboard(g_window) != FALSE; }, 2000);
@@ -416,7 +423,7 @@ void MSWindowsClipboardFilesTests::clipboard_holdsTheFilesMarkedAsDeskflows()
   const auto copied = received("a.txt\nnested", &list);
   const DWORD before = GetClipboardSequenceNumber();
   clipboard.set(copied.get());
-  QVERIFY(clipboard.waitUntilDone(5000));
+  QVERIFY(finished(clipboard));
   QVERIFY(GetClipboardSequenceNumber() != before);
   QCOMPARE(clipboard.filesPut(), uint64_t{1});
 
@@ -466,7 +473,7 @@ void MSWindowsClipboardFilesTests::clipboard_laterClipboardWins()
   const auto text = received("later", nullptr);
   clipboard.set(files.get());
   clipboard.set(text.get());
-  QVERIFY(clipboard.waitUntilDone(5000));
+  QVERIFY(finished(clipboard));
 
   QVERIFY(!hasFileDescriptors());
   QCOMPARE(clipboardText(), QStringLiteral("later"));
@@ -482,9 +489,9 @@ void MSWindowsClipboardFilesTests::clipboard_sameClipboardTwice_putsFilesOnce()
 
   // once for each clipboard ID
   clipboard.set(files.get());
-  QVERIFY(clipboard.waitUntilDone(5000));
+  QVERIFY(finished(clipboard));
   clipboard.set(files.get());
-  QVERIFY(clipboard.waitUntilDone(5000));
+  QVERIFY(finished(clipboard));
   QCOMPARE(clipboard.filesPut(), uint64_t{1});
 
   // replaced by somebody else in between, it is written again
@@ -492,7 +499,7 @@ void MSWindowsClipboardFilesTests::clipboard_sameClipboardTwice_putsFilesOnce()
   EmptyClipboard();
   CloseClipboard();
   clipboard.set(files.get());
-  QVERIFY(clipboard.waitUntilDone(5000));
+  QVERIFY(finished(clipboard));
   QCOMPARE(clipboard.filesPut(), uint64_t{2});
   QVERIFY(hasFileDescriptors());
 }
@@ -504,7 +511,7 @@ void MSWindowsClipboardFilesTests::clipboard_emptied_isDeskflows()
   const auto text = received("something", nullptr);
   clipboard.set(text.get());
   clipboard.set(nullptr);
-  QVERIFY(clipboard.waitUntilDone(5000));
+  QVERIFY(finished(clipboard));
   QVERIFY(MSWindowsClipboard::isOwnedByDeskflow());
   QVERIFY(IsClipboardFormatAvailable(CF_UNICODETEXT) == FALSE);
 }
@@ -516,7 +523,7 @@ void MSWindowsClipboardFilesTests::clipboard_gone_takesTheFilesOff()
   auto clipboard = std::make_unique<MSWindowsClipboardFiles>(link.remoteOfB);
   const auto files = received("", &list);
   clipboard->set(files.get());
-  QVERIFY(clipboard->waitUntilDone(5000));
+  QVERIFY(finished(*clipboard));
   QVERIFY(hasFileDescriptors());
 
   // the files can't be fetched once it is gone, they must not stay on the clipboard
