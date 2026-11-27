@@ -42,10 +42,14 @@ if(WIN32)
     MSWindowsClipboardBitmapConverter.h
     MSWindowsClipboardFacade.cpp
     MSWindowsClipboardFacade.h
+    MSWindowsClipboardFiles.cpp
+    MSWindowsClipboardFiles.h
     MSWindowsClipboardHTMLConverter.cpp
     MSWindowsClipboardHTMLConverter.h
     MSWindowsClipboardUTF16Converter.cpp
     MSWindowsClipboardUTF16Converter.h
+    MSWindowsComSecurity.cpp
+    MSWindowsComSecurity.h
     MSWindowsComputer.cpp
     MSWindowsComputer.h
     MSWindowsDebugOutputter.cpp
@@ -62,6 +66,8 @@ if(WIN32)
     MSWindowsPowerManager.h
     MSWindowsProcess.cpp
     MSWindowsProcess.h
+    MSWindowsRemoteFileSource.cpp
+    MSWindowsRemoteFileSource.h
     MSWindowsScreenSaver.cpp
     MSWindowsScreenSaver.h
     MSWindowsSession.cpp

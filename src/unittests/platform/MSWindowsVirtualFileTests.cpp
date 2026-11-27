@@ -68,13 +68,15 @@ class MemoryVirtualFileSource : public IMSWindowsVirtualFileSource
 public:
   void addDirectory(const QString &path)
   {
-    m_entries.push_back({path.toStdWString(), true, 0, s_modifiedTime});
+    m_entries.push_back({path.toStdWString(), true, 0, s_modifiedTime, m_entries.size()});
     m_contents.push_back({});
   }
 
   void addFile(const QString &path, const QByteArray &data)
   {
-    m_entries.push_back({path.toStdWString(), false, static_cast<uint64_t>(data.size()), s_modifiedTime});
+    m_entries.push_back(
+        {path.toStdWString(), false, static_cast<uint64_t>(data.size()), s_modifiedTime, m_entries.size()}
+    );
     m_contents.push_back(data);
   }
 
@@ -87,6 +89,7 @@ public:
 
   std::unique_ptr<IMSWindowsVirtualFileReader> open(size_t index, uint64_t offset) override
   {
+    // the position in the list is the identifier
     ++openCalls;
     if (index >= m_contents.size() || m_entries[index].isDirectory) {
       return nullptr;
@@ -225,6 +228,38 @@ void MSWindowsVirtualFileTests::fileDescriptorListsEntries()
   ReleaseStgMedium(&medium);
   QCOMPARE(m_source->listCalls.load(), 1);
   QCOMPARE(m_source->openCalls.load(), 0);
+
+  QCOMPARE(object->Release(), 0UL);
+}
+
+void MSWindowsVirtualFileTests::fileDescriptorListsAgainForAnotherPaste()
+{
+  m_source->resetCounters();
+  auto *object = new MSWindowsVirtualFileDataObject(m_source);
+  FORMATETC format = descriptorFormat();
+  STGMEDIUM medium = {};
+  QCOMPARE(object->GetData(&format, &medium), S_OK);
+  ReleaseStgMedium(&medium);
+  QCOMPARE(m_source->listCalls.load(), 1);
+
+  // asked again a while later: another paste, the files may have changed since
+  QTest::qWait(3200);
+  QCOMPARE(object->GetData(&format, &medium), S_OK);
+  ReleaseStgMedium(&medium);
+  QCOMPARE(m_source->listCalls.load(), 2);
+
+  // but not while files are being copied, the descriptors handed out must stay what they are
+  QCOMPARE(object->StartOperation(nullptr), S_OK);
+  QTest::qWait(3200);
+  QCOMPARE(object->GetData(&format, &medium), S_OK);
+  ReleaseStgMedium(&medium);
+  QCOMPARE(m_source->listCalls.load(), 2);
+  // the first entry is a directory, the second a file
+  FORMATETC contents = contentsFormat(1);
+  QCOMPARE(object->GetData(&contents, &medium), S_OK);
+  ReleaseStgMedium(&medium);
+  QCOMPARE(m_source->listCalls.load(), 2);
+  QCOMPARE(object->EndOperation(S_OK, nullptr, DROPEFFECT_COPY), S_OK);
 
   QCOMPARE(object->Release(), 0UL);
 }

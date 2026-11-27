@@ -23,6 +23,9 @@ const size_t kMaxDescriptorPath = MAX_PATH - 1;
 //! Seconds between 1601-01-01 and 1970-01-01
 const uint64_t kFileTimeEpochOffset = 11644473600ULL;
 
+//! Asking for the descriptors again after this long is taken for another paste
+const auto kListingLifetime = std::chrono::seconds(3);
+
 FILETIME toFileTime(int64_t unixSeconds)
 {
   const uint64_t ticks = (static_cast<uint64_t>(unixSeconds) + kFileTimeEpochOffset) * 10000000ULL;
@@ -66,11 +69,8 @@ of the thread that owns the clipboard.
 class VirtualFileStream : public IStream
 {
 public:
-  VirtualFileStream(
-      std::shared_ptr<IMSWindowsVirtualFileSource> source, size_t sourceIndex, const MSWindowsVirtualFileEntry &entry
-  )
+  VirtualFileStream(std::shared_ptr<IMSWindowsVirtualFileSource> source, const MSWindowsVirtualFileEntry &entry)
       : m_source(std::move(source)),
-        m_sourceIndex(sourceIndex),
         m_entry(entry)
   {
     CoCreateFreeThreadedMarshaler(static_cast<IStream *>(this), &m_marshaler);
@@ -130,7 +130,7 @@ public:
     auto *target = static_cast<uint8_t *>(buffer);
     while (total < size && m_position < m_entry.size) {
       if (m_reader == nullptr) {
-        m_reader = m_source->open(m_sourceIndex, m_position);
+        m_reader = m_source->open(m_entry.sourceId, m_position);
         if (m_reader == nullptr) {
           LOG_WARN("can't open virtual file for reading: %s", toUtf8(m_entry.relativePath).c_str());
           m_failed = true;
@@ -314,7 +314,6 @@ private:
   LONG m_refCount = 1;
   IUnknown *m_marshaler = nullptr;
   std::shared_ptr<IMSWindowsVirtualFileSource> m_source;
-  size_t m_sourceIndex;
   MSWindowsVirtualFileEntry m_entry;
 
   std::mutex m_mutex;
@@ -405,11 +404,14 @@ IFACEMETHODIMP_(ULONG) MSWindowsVirtualFileDataObject::Release()
   return static_cast<ULONG>(count);
 }
 
-bool MSWindowsVirtualFileDataObject::ensureListed()
+bool MSWindowsVirtualFileDataObject::ensureListed(bool fresh)
 {
   {
     std::scoped_lock lock{m_mutex};
-    if (m_listed) {
+    // a paste asks for the descriptors first. one that comes a while after the last is another
+    // paste, and the files may have changed since. while files are copied the list stays as it is.
+    const bool current = !fresh || m_inOperation || std::chrono::steady_clock::now() - m_listedAt < kListingLifetime;
+    if (m_listed && current) {
       return !m_listFailed;
     }
   }
@@ -419,10 +421,8 @@ bool MSWindowsVirtualFileDataObject::ensureListed()
   const bool ok = m_source->list(entries);
 
   std::scoped_lock lock{m_mutex};
-  if (m_listed) {
-    return !m_listFailed;
-  }
   m_listed = true;
+  m_listedAt = std::chrono::steady_clock::now();
   m_listFailed = !ok;
   if (!ok) {
     LOG_WARN("failed to list the files offered on the clipboard");
@@ -430,22 +430,22 @@ bool MSWindowsVirtualFileDataObject::ensureListed()
   }
 
   m_entries.clear();
-  for (size_t index = 0; index < entries.size(); ++index) {
-    if (entries[index].relativePath.empty()) {
+  for (const auto &entry : entries) {
+    if (entry.relativePath.empty()) {
       continue;
     }
-    if (entries[index].relativePath.size() > kMaxDescriptorPath) {
-      LOG_WARN("skipping file, path is too long for the clipboard: %s", toUtf8(entries[index].relativePath).c_str());
+    if (entry.relativePath.size() > kMaxDescriptorPath) {
+      LOG_WARN("skipping file, path is too long for the clipboard: %s", toUtf8(entry.relativePath).c_str());
       continue;
     }
-    m_entries.push_back({entries[index], index});
+    m_entries.push_back(entry);
   }
   return true;
 }
 
 HRESULT MSWindowsVirtualFileDataObject::getFileDescriptor(STGMEDIUM *medium)
 {
-  if (!ensureListed()) {
+  if (!ensureListed(true)) {
     return E_FAIL;
   }
 
@@ -469,7 +469,7 @@ HRESULT MSWindowsVirtualFileDataObject::getFileDescriptor(STGMEDIUM *medium)
 
   group->cItems = static_cast<UINT>(count);
   for (size_t index = 0; index < count; ++index) {
-    const auto &entry = m_entries[index].entry;
+    const auto &entry = m_entries[index];
     FILEDESCRIPTORW &descriptor = group->fgd[index];
     descriptor.dwFlags = FD_ATTRIBUTES | FD_PROGRESSUI;
     if (entry.isDirectory) {
@@ -497,7 +497,8 @@ HRESULT MSWindowsVirtualFileDataObject::getFileDescriptor(STGMEDIUM *medium)
 
 HRESULT MSWindowsVirtualFileDataObject::getFileContents(LONG index, STGMEDIUM *medium)
 {
-  if (!ensureListed()) {
+  // the index is one of the descriptors handed out last
+  if (!ensureListed(false)) {
     return E_FAIL;
   }
 
@@ -506,13 +507,13 @@ HRESULT MSWindowsVirtualFileDataObject::getFileContents(LONG index, STGMEDIUM *m
     return DV_E_LINDEX;
   }
 
-  const ListedEntry &listed = m_entries[static_cast<size_t>(index)];
-  if (listed.entry.isDirectory) {
+  const MSWindowsVirtualFileEntry &entry = m_entries[static_cast<size_t>(index)];
+  if (entry.isDirectory) {
     return DV_E_LINDEX;
   }
 
   medium->tymed = TYMED_ISTREAM;
-  medium->pstm = new VirtualFileStream(m_source, listed.sourceIndex, listed.entry);
+  medium->pstm = new VirtualFileStream(m_source, entry);
   medium->pUnkForRelease = nullptr;
   return S_OK;
 }

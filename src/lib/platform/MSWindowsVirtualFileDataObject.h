@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -28,6 +29,8 @@ struct MSWindowsVirtualFileEntry
   uint64_t size = 0;
   //! Seconds since the Unix epoch, zero when unknown
   int64_t modifiedTime = 0;
+  //! Tells the source which file to open, the same however often the files are listed
+  size_t sourceId = 0;
 };
 
 //! Sequential reader for the contents of one virtual file
@@ -58,16 +61,18 @@ public:
   //! List all files and directories
   /*!
   Directories must come before their contents. May block. Returns false if
-  the list can not be produced.
+  the list can not be produced. Called again for every paste, the files may
+  have changed in between.
   */
   virtual bool list(std::vector<MSWindowsVirtualFileEntry> &entries) = 0;
 
   //! Open the contents of a file
   /*!
-  \p index refers to the entries returned by the last call to list(). Reading
-  starts at \p offset. Returns nullptr if the file can not be opened.
+  \p sourceId is that of an entry returned by list(), of this listing or an
+  earlier one. Reading starts at \p offset. Returns nullptr if the file can
+  not be opened.
   */
-  virtual std::unique_ptr<IMSWindowsVirtualFileReader> open(size_t index, uint64_t offset) = 0;
+  virtual std::unique_ptr<IMSWindowsVirtualFileReader> open(size_t sourceId, uint64_t offset) = 0;
 };
 
 //! Clipboard data object that offers files which are transferred when pasted
@@ -123,15 +128,8 @@ private:
   // destroyed through Release()
   virtual ~MSWindowsVirtualFileDataObject() = default;
 
-  //! Entry that can be described to the shell
-  struct ListedEntry
-  {
-    MSWindowsVirtualFileEntry entry;
-    //! Index of the entry as known by the source
-    size_t sourceIndex = 0;
-  };
-
-  bool ensureListed();
+  //! List the files, again if \p fresh and the last listing is from an earlier paste
+  bool ensureListed(bool fresh);
   HRESULT getFileDescriptor(STGMEDIUM *medium);
   HRESULT getFileContents(LONG index, STGMEDIUM *medium);
   HRESULT getGlobalFormat(UINT format, STGMEDIUM *medium) const;
@@ -143,7 +141,8 @@ private:
   mutable std::mutex m_mutex;
   bool m_listed = false;
   bool m_listFailed = false;
-  std::vector<ListedEntry> m_entries;
+  std::chrono::steady_clock::time_point m_listedAt{};
+  std::vector<MSWindowsVirtualFileEntry> m_entries;
   std::map<UINT, std::vector<uint8_t>> m_globalFormats;
   bool m_asyncMode = true;
   bool m_inOperation = false;

@@ -20,6 +20,7 @@ private Q_SLOTS:
   void initTestCase();
   void cleanupTestCase();
   void fileDescriptorListsEntries();
+  void fileDescriptorListsAgainForAnotherPaste();
   void fileDescriptorSkipsTooLongPaths();
   void fileContentsStreamsData();
   void streamSeekRestartsReading();

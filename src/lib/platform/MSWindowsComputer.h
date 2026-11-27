@@ -13,7 +13,9 @@
 #include "platform/MSWindowsPowerManager.h"
 
 #include <map>
+#include <memory>
 #include <string>
+#include <vector>
 
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
@@ -26,6 +28,8 @@ class Thread;
 class MSWindowsDropTarget;
 
 //! Implementation of IPlatformComputer for Microsoft Windows
+class MSWindowsClipboardFiles;
+
 class MSWindowsComputer : public PlatformComputer
 {
 public:
@@ -113,6 +117,8 @@ public:
   void leave() override;
   bool setClipboard(ClipboardID, const IClipboard *) override;
   void checkClipboards() override;
+  bool getClipboardFiles(ClipboardID id, std::vector<std::string> &paths) const override;
+  void setFileTransfer(deskflow::FileTransfer *fileTransfer) override;
   void openScreensaver(bool notify) override;
   void closeScreensaver() override;
   void screensaver(bool activate) override;
@@ -303,6 +309,8 @@ private:
   HWND m_window = nullptr;
   DWORD m_clipboardSequenceNumber = 0;
   bool m_ownClipboard = false;
+  //! Writes the clipboard, files of other computers included, made when there is a file transfer
+  std::unique_ptr<MSWindowsClipboardFiles> m_clipboardFiles;
 
   // one desk per desktop and a cond var to communicate with it
   MSWindowsDesks *m_desks = nullptr;

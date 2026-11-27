@@ -21,8 +21,10 @@
 #include "deskflow/ClientApp.h"
 #include "deskflow/Clipboard.h"
 #include "deskflow/DisplayException.h"
+#include "deskflow/FileTransfer.h"
 #include "deskflow/KeyMap.h"
 #include "platform/MSWindowsClipboard.h"
+#include "platform/MSWindowsClipboardFiles.h"
 #include "platform/MSWindowsDesks.h"
 #include "platform/MSWindowsEventQueueBuffer.h"
 #include "platform/MSWindowsKeyState.h"
@@ -320,6 +322,12 @@ void MSWindowsComputer::leave()
 
 bool MSWindowsComputer::setClipboard(ClipboardID, const IClipboard *src)
 {
+  if (m_clipboardFiles != nullptr) {
+    // one thread writes every clipboard, in order, files of other computers included
+    m_clipboardFiles->set(src);
+    return true;
+  }
+
   MSWindowsClipboard dst(m_window);
   if (src != nullptr) {
     // save clipboard data
@@ -332,6 +340,21 @@ bool MSWindowsComputer::setClipboard(ClipboardID, const IClipboard *src)
     dst.empty();
     dst.close();
     return true;
+  }
+}
+
+bool MSWindowsComputer::getClipboardFiles(ClipboardID, std::vector<std::string> &paths) const
+{
+  // the same for both clipboards, there is one
+  return MSWindowsClipboardFiles::readFiles(m_window, paths);
+}
+
+void MSWindowsComputer::setFileTransfer(deskflow::FileTransfer *fileTransfer)
+{
+  // what reads from the transfer goes first
+  m_clipboardFiles.reset();
+  if (fileTransfer != nullptr) {
+    m_clipboardFiles = std::make_unique<MSWindowsClipboardFiles>(fileTransfer->remoteFiles());
   }
 }
 

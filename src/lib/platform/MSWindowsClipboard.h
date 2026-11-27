@@ -45,6 +45,9 @@ public:
   //! Test if clipboard is owned by deskflow
   static bool isOwnedByDeskflow();
 
+  //! The format that marks the clipboard as owned by deskflow
+  static UINT getOwnershipFormat();
+
   // IClipboard overrides
   bool empty() override;
   void add(Format, const std::string &data) override;
@@ -62,8 +65,6 @@ private:
   UINT convertFormatToWin32(Format) const;
   HANDLE convertTextToWin32(const std::string &data) const;
   std::string convertTextFromWin32(HANDLE) const;
-
-  static UINT getOwnershipFormat();
 
 private:
   using ConverterList = std::vector<IMSWindowsClipboardConverter *>;

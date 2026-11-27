@@ -19,6 +19,7 @@
 
 #if defined(Q_OS_WIN)
 #include "arch/win32/ArchMiscWindows.h"
+#include "platform/MSWindowsComSecurity.h"
 #endif
 
 #include <QApplication>
@@ -71,6 +72,8 @@ int main(int argc, char **argv)
 {
 #if defined(Q_OS_WIN)
   ArchMiscWindows::setInstanceWin32(GetModuleHandle(nullptr));
+  // before Qt or anything else uses COM: Explorer of the user pastes files through it
+  const HRESULT comSecurity = allowUserToCallThroughCom();
 #endif
 
   QApplication::setApplicationName(QStringLiteral("%1 Core").arg(kAppName));
@@ -81,6 +84,17 @@ int main(int argc, char **argv)
 
   Log log;
   qInstallMessageHandler(qtMessageHandler);
+
+#if defined(Q_OS_WIN)
+  if (FAILED(comSecurity)) {
+    LOG_WARN(
+        "files copied on another computer may not paste, COM security not set: 0x%08x",
+        static_cast<unsigned>(comSecurity)
+    );
+  } else {
+    LOG_DEBUG("COM security set for pasting files");
+  }
+#endif
 
   CoreArgParser parser(QCoreApplication::arguments());
 
